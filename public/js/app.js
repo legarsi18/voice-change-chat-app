@@ -181,8 +181,9 @@ function renderLobby(app, roomId, token) {
       <section class="section">
         <label class="section-label">ボイス</label>
         <div class="voice-grid">${voiceOptions}</div>
-        <button class="btn btn-secondary btn-small" id="testVoice">🎤 マイクを確認する</button>
+        <button class="btn btn-secondary btn-small" id="testVoice">🎤 プレビューON（声を確認する）</button>
         <div id="testStatus" class="test-status"></div>
+        <audio id="monitorAudio" playsinline style="display:none"></audio>
         <p class="test-note">※ イヤホン推奨。スピーカーだとハウリングします</p>
       </section>
 
@@ -225,47 +226,71 @@ function renderLobby(app, roomId, token) {
       document.querySelectorAll('.voice-option').forEach(o => o.classList.remove('selected'));
       e.target.closest('.voice-option').classList.add('selected');
       profile.voice = e.target.value;
+      // プレビュー中ならリアルタイムでプリセット切り替え
+      if (isMonitoring && testVc) {
+        testVc.setPreset(profile.voice);
+      }
     });
   });
 
   // マイク権限状態チェック（画面表示直後）
   checkAndShowMicStatus();
 
-  // マイクテスト・確認ボタン
+  // ライブプレビュートグル（ON/OFFで声をリアルタイム確認）
   let testVc = null;
+  let isMonitoring = false;
+  const monitorAudio = document.getElementById('monitorAudio');
+
+  async function stopPreview() {
+    isMonitoring = false;
+    monitorAudio.pause();
+    monitorAudio.srcObject = null;
+    if (testVc) {
+      testVc.setMonitor(false);
+      await testVc.audioContext?.close().catch(() => {});
+      testVc = null;
+    }
+    const btn = document.getElementById('testVoice');
+    const status = document.getElementById('testStatus');
+    if (btn) btn.textContent = '🎤 プレビューON（声を確認する）';
+    if (status) status.textContent = '';
+  }
+
   document.getElementById('testVoice').addEventListener('click', async () => {
     const btn = document.getElementById('testVoice');
     const status = document.getElementById('testStatus');
-    btn.disabled = true;
 
-    if (testVc) {
-      testVc.setMonitor(false);
-      testVc.audioContext?.close().catch(() => {});
-      testVc = null;
+    // ONの場合はOFFにして終了
+    if (isMonitoring) {
+      await stopPreview();
+      return;
     }
+
+    btn.disabled = true;
+    status.textContent = 'マイクを起動中…';
 
     try {
       if (!testMicStream || testMicStream.getTracks().every(t => t.readyState === 'ended')) {
-        status.textContent = 'マイクを起動中…';
         testMicStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       }
-
-      // マイク取得成功 → ステータスバーをOKに更新
       showMicStatusBar('ok');
 
       status.textContent = '音声エンジンを起動中…';
       testVc = new VoiceChanger();
-      await testVc.init(testMicStream);
+      const outStream = await testVc.init(testMicStream);
       testVc.setPreset(profile.voice);
       await testVc.resume();
-      testVc.setMonitor(true);
 
-      status.textContent = '🎤 再生中（3秒）… イヤホンで自分の声が聞こえれば正常です';
-      await new Promise(r => setTimeout(r, 3000));
+      // audio要素でiOS互換再生（audioContext.destinationより確実）
+      monitorAudio.srcObject = outStream;
+      await monitorAudio.play().catch(() => {
+        // audio要素で失敗した場合のフォールバック
+        testVc.setMonitor(true);
+      });
 
-      testVc.setMonitor(false);
-      status.textContent = '✅ テスト完了 — マイクOK！このまま参加できます';
-      btn.textContent = '▶ もう一度テスト';
+      isMonitoring = true;
+      btn.textContent = '⏹ プレビューOFF（停止）';
+      status.textContent = '🔴 プレビュー中… イヤホンでボイスを確認できます。選んだらルームに参加してください。';
     } catch (err) {
       console.error('[testVoice] error:', err);
       testMicStream?.getTracks().forEach(t => t.stop());
@@ -275,6 +300,8 @@ function renderLobby(app, roomId, token) {
       btn.disabled = false;
     }
   });
+
+  // ボイス切替時にプレビュー中ならリアルタイムでプリセット更新
 
   // 参加ボタン
   document.getElementById('joinBtn').addEventListener('click', async () => {
@@ -317,7 +344,15 @@ function renderLobby(app, roomId, token) {
       if (!res.ok) throw new Error(data.error || `接続エラー (${res.status})`);
       if (!data.sessionId) throw new Error('セッションIDが取得できませんでした');
 
-      // マイクストリームをルームに引き継ぐ（ルームで再取得不要にする）
+      // プレビューを停止してストリームをルームに引き継ぐ
+      if (isMonitoring) {
+        monitorAudio.pause();
+        monitorAudio.srcObject = null;
+        testVc?.setMonitor(false);
+        await testVc?.audioContext?.close().catch(() => {});
+        testVc = null;
+        isMonitoring = false;
+      }
       sharedMicStream = testMicStream;
       testMicStream = null;
 
@@ -528,13 +563,32 @@ async function renderRoom(app, roomId) {
   document.getElementById('memoInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendMemo(); });
 
   document.getElementById('leaveBtn').addEventListener('click', () => {
-    if (confirm('退出しますか？')) {
+    // Braveはconfirm()をブロックするためカスタムダイアログを使用
+    if (document.getElementById('leaveConfirmOverlay')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'leaveConfirmOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;z-index:999;';
+    overlay.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:16px;padding:28px 24px;width:280px;text-align:center;">
+        <p style="font-size:16px;font-weight:700;margin-bottom:8px;">ルームを退出</p>
+        <p style="font-size:13px;color:var(--text2);margin-bottom:24px;">退出するとルームから切断されます</p>
+        <div style="display:flex;gap:10px;">
+          <button id="leaveYes" style="flex:1;padding:12px;background:var(--danger);color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;">退出する</button>
+          <button id="leaveNo" style="flex:1;padding:12px;background:var(--bg3);color:var(--text);border:1px solid var(--border);border-radius:10px;font-size:15px;font-weight:600;cursor:pointer;">キャンセル</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    document.getElementById('leaveYes').addEventListener('click', () => {
+      overlay.remove();
       clearInterval(timerInterval);
       clearSession();
       roomClient.destroy();
-      voiceChanger.destroy();
+      voiceChanger?.destroy();
+      document.getElementById('keepalive')?.pause();
       location.hash = '#/';
-    }
+    });
+    document.getElementById('leaveNo').addEventListener('click', () => overlay.remove());
   });
 }
 

@@ -28,8 +28,9 @@ export class RoomClient {
   }
 
   async _connectSignaling() {
-    const wsUrl = new URL(`/api/rooms/${this.roomId}/ws`, location.href);
-    wsUrl.protocol = wsUrl.protocol.replace('http', 'ws');
+    // WebSocketはCORSの対象外なので workers.dev に直接接続（Braveでも問題なし）
+    const wsUrl = new URL(`https://voice-chat-worker.legarsi-18k.workers.dev/api/rooms/${this.roomId}/ws`);
+    wsUrl.protocol = 'wss:';
     wsUrl.searchParams.set('name', this.userMeta.name);
     wsUrl.searchParams.set('voice', this.userMeta.voice);
     wsUrl.searchParams.set('icon', this.userMeta.icon);
