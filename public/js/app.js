@@ -11,6 +11,7 @@ let voiceChanger = null;
 let roomClient = null;
 let isMuted = false;
 let testMicStream = null; // マイクテスト用ストリームをキャッシュ（iOS許可を使い回す）
+let sharedMicStream = null; // ロビーで取得したストリームをルームに引き継ぐ
 
 // ───────────────────────────────────────────
 // プロフィール永続化
@@ -150,6 +151,9 @@ function renderLobby(app, roomId, token) {
     <div class="screen lobby-screen">
       <h2>ルームに参加する</h2>
 
+      <!-- マイク権限ステータス -->
+      <div id="micStatus" class="mic-status-bar" style="display:none"></div>
+
       <section class="section">
         <label class="section-label">アイコン</label>
         <div class="icon-grid">
@@ -177,7 +181,7 @@ function renderLobby(app, roomId, token) {
       <section class="section">
         <label class="section-label">ボイス</label>
         <div class="voice-grid">${voiceOptions}</div>
-        <button class="btn btn-secondary btn-small" id="testVoice">▶ テスト（3秒間マイク入力を再生）</button>
+        <button class="btn btn-secondary btn-small" id="testVoice">🎤 マイクを確認する</button>
         <div id="testStatus" class="test-status"></div>
         <p class="test-note">※ イヤホン推奨。スピーカーだとハウリングします</p>
       </section>
@@ -224,14 +228,16 @@ function renderLobby(app, roomId, token) {
     });
   });
 
-  // テスト再生（マイク→ボイスチェンジャー→スピーカーに3秒間流す）
+  // マイク権限状態チェック（画面表示直後）
+  checkAndShowMicStatus();
+
+  // マイクテスト・確認ボタン
   let testVc = null;
   document.getElementById('testVoice').addEventListener('click', async () => {
     const btn = document.getElementById('testVoice');
     const status = document.getElementById('testStatus');
     btn.disabled = true;
 
-    // 前回のテスト用VoiceChangerを閉じる（ストリームは閉じない）
     if (testVc) {
       testVc.setMonitor(false);
       testVc.audioContext?.close().catch(() => {});
@@ -239,36 +245,32 @@ function renderLobby(app, roomId, token) {
     }
 
     try {
-      // マイクストリームをキャッシュして毎回許可ダイアログが出ないようにする
       if (!testMicStream || testMicStream.getTracks().every(t => t.readyState === 'ended')) {
         status.textContent = 'マイクを起動中…';
         testMicStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       }
+
+      // マイク取得成功 → ステータスバーをOKに更新
+      showMicStatusBar('ok');
 
       status.textContent = '音声エンジンを起動中…';
       testVc = new VoiceChanger();
       await testVc.init(testMicStream);
       testVc.setPreset(profile.voice);
       await testVc.resume();
-
-      // スピーカーに直接接続（audio.srcObject方式はiOSのautoplay制限を受けるため使わない）
       testVc.setMonitor(true);
 
       status.textContent = '🎤 再生中（3秒）… イヤホンで自分の声が聞こえれば正常です';
       await new Promise(r => setTimeout(r, 3000));
 
       testVc.setMonitor(false);
-      status.textContent = '✅ テスト完了';
+      status.textContent = '✅ テスト完了 — マイクOK！このまま参加できます';
+      btn.textContent = '▶ もう一度テスト';
     } catch (err) {
       console.error('[testVoice] error:', err);
-      status.textContent = '❌ ' + (err.name === 'NotAllowedError'
-        ? 'マイクへのアクセスを許可してください'
-        : err.name === 'NotFoundError'
-          ? 'マイクが見つかりません'
-          : `エラー: ${err.message}`);
-      // エラー時はストリームをリセット（次回再取得させる）
       testMicStream?.getTracks().forEach(t => t.stop());
       testMicStream = null;
+      showMicError(err, status);
     } finally {
       btn.disabled = false;
     }
@@ -278,6 +280,20 @@ function renderLobby(app, roomId, token) {
   document.getElementById('joinBtn').addEventListener('click', async () => {
     const name = document.getElementById('nameInput').value.trim();
     if (!name) { alert('表示名を入力してください'); return; }
+
+    // マイクが確認されていない場合、参加前に取得する
+    if (!testMicStream || testMicStream.getTracks().every(t => t.readyState === 'ended')) {
+      const status = document.getElementById('testStatus');
+      status.textContent = 'マイク確認中…';
+      try {
+        testMicStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        showMicStatusBar('ok');
+        status.textContent = '';
+      } catch (err) {
+        showMicError(err, status);
+        return; // マイクNGは参加させない
+      }
+    }
 
     profile.name = name;
     if (uploadedIconData) profile.iconData = uploadedIconData;
@@ -291,10 +307,6 @@ function renderLobby(app, roomId, token) {
       console.log('[join] roomId:', roomId, 'token:', token);
       if (!token) throw new Error('招待トークンが見つかりません。招待URLを使って開いてください');
 
-      // テスト用ストリームを解放してからルームに入る
-      testMicStream?.getTracks().forEach(t => t.stop());
-      testMicStream = null;
-
       const res = await fetch(`${WORKER_URL}/api/rooms/${roomId}/join`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -305,7 +317,10 @@ function renderLobby(app, roomId, token) {
       if (!res.ok) throw new Error(data.error || `接続エラー (${res.status})`);
       if (!data.sessionId) throw new Error('セッションIDが取得できませんでした');
 
-      // localStorageに保存（iOSのページリロード対策）
+      // マイクストリームをルームに引き継ぐ（ルームで再取得不要にする）
+      sharedMicStream = testMicStream;
+      testMicStream = null;
+
       saveSession({ sessionId: data.sessionId, roomId, token, joinedAt: Date.now() });
       location.hash = `#/room/${roomId}`;
     } catch (err) {
@@ -314,6 +329,60 @@ function renderLobby(app, roomId, token) {
       alert(`参加に失敗しました: ${err.message}`);
     }
   });
+}
+
+// マイク権限状態を画面上部のバーで表示
+async function checkAndShowMicStatus() {
+  try {
+    const result = await navigator.permissions.query({ name: 'microphone' });
+    if (result.state === 'denied') {
+      showMicStatusBar('denied');
+    } else if (result.state === 'granted') {
+      showMicStatusBar('ok');
+    }
+    // 'prompt' の場合は何も表示しない（初回）
+    result.onchange = () => checkAndShowMicStatus();
+  } catch {
+    // navigator.permissions 非対応ブラウザは無視
+  }
+}
+
+function showMicStatusBar(state) {
+  const bar = document.getElementById('micStatus');
+  if (!bar) return;
+  if (state === 'ok') {
+    bar.style.cssText = 'display:block;background:#1a3a1a;border:1px solid #4aad5a;border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:13px;color:#4aad5a;';
+    bar.textContent = '✅ マイク使用可能';
+  } else if (state === 'denied') {
+    bar.style.cssText = 'display:block;background:#3a1a1a;border:1px solid #c84040;border-radius:10px;padding:10px 14px;margin-bottom:16px;font-size:13px;color:#ff6060;';
+    bar.innerHTML = '🚫 マイクが拒否されています。<br>iOSの場合: <b>設定 → Brave（またはSafari）→ マイク → オン</b><br>Androidの場合: <b>設定 → アプリ → ブラウザ → 権限 → マイク → 許可</b><br>PCの場合: <b>アドレスバーの🔒 → サイトの設定 → マイク → 許可</b><br>変更後にページを再読み込みしてください。';
+  }
+}
+
+function showMicError(err, statusEl) {
+  console.error('[mic] error:', err.name, err.message);
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  const isAndroid = /Android/.test(navigator.userAgent);
+
+  let msg = '';
+  if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+    showMicStatusBar('denied');
+    if (isIOS) {
+      msg = '🚫 マイクが拒否されています\n\n設定 → Brave（またはSafari）→ マイク → オン\n\nその後ページを再読み込みしてください';
+    } else if (isAndroid) {
+      msg = '🚫 マイクが拒否されています\n\n設定 → アプリ → ブラウザ → 権限 → マイク → 許可\n\nその後ページを再読み込みしてください';
+    } else {
+      msg = '🚫 マイクが拒否されています\n\nアドレスバーの🔒アイコン → サイトの設定 → マイク → 許可\n\nその後ページを再読み込みしてください';
+    }
+    if (statusEl) statusEl.textContent = '❌ マイクが拒否されています。上の手順に従って許可してください。';
+  } else if (err.name === 'NotFoundError') {
+    msg = 'マイクが見つかりません。マイク（イヤホン）が接続されているか確認してください。';
+    if (statusEl) statusEl.textContent = '❌ マイクが見つかりません';
+  } else {
+    msg = `マイクエラー: ${err.message}`;
+    if (statusEl) statusEl.textContent = `❌ エラー: ${err.message}`;
+  }
+  alert(msg);
 }
 
 // ───────────────────────────────────────────
@@ -391,15 +460,22 @@ async function renderRoom(app, roomId) {
   const keepalive = document.getElementById('keepalive');
   if (keepalive?.paused) keepalive.play().catch(() => {});
 
-  // マイク取得
-  let micStream;
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-  } catch (err) {
-    clearInterval(timerInterval);
-    alert(`マイクへのアクセスを許可してください (${err.message})`);
-    location.hash = '#/';
-    return;
+  // マイク取得（ロビーで既に取得済みの場合は引き継ぐ）
+  let micStream = sharedMicStream;
+  sharedMicStream = null;
+  if (!micStream || micStream.getTracks().every(t => t.readyState === 'ended')) {
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    } catch (err) {
+      clearInterval(timerInterval);
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+      const hint = isIOS
+        ? '\n\niOSの場合: 設定 → ブラウザアプリ → マイク → オン\nその後ページを再読み込みしてください'
+        : '\n\nアドレスバーの🔒 → サイトの設定 → マイク → 許可\nその後ページを再読み込みしてください';
+      alert(`マイクへのアクセスが拒否されています。${hint}`);
+      location.hash = '#/';
+      return;
+    }
   }
 
   voiceChanger = new VoiceChanger();
