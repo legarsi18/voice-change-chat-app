@@ -1,0 +1,14 @@
+{
+  "name": "作戦会議",
+  "short_name": "作戦会議",
+  "description": "ボイスチェンジャー付き音声会議アプリ",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d0d14",
+  "theme_color": "#0d0d14",
+  "orientation": "portrait",
+  "icons": [
+    { "src": "/icons/pwa-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/pwa-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <circle cx="50" cy="50" r="50" fill="#080d08"/>
+  <!-- 頭巾（女忍） -->
+  <ellipse cx="50" cy="33" rx="21" ry="18" fill="#0a0a14"/>
+  <rect x="29" y="33" width="42" height="10" fill="#0a0a14"/>
+  <!-- 目元だけ -->
+  <rect x="29" y="43" width="42" height="13" rx="2" fill="#0a0a14"/>
+  <!-- 目（切れ長・鋭い） -->
+  <path d="M36 49 Q42 46 48 49" stroke="#e8c870" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <path d="M52 49 Q58 46 64 49" stroke="#e8c870" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <ellipse cx="42" cy="49" rx="2.5" ry="2.5" fill="#e8c870" opacity="0.3"/>
+  <ellipse cx="58" cy="49" rx="2.5" ry="2.5" fill="#e8c870" opacity="0.3"/>
+  <!-- 忍び装束 -->
+  <path d="M29 72 Q50 79 71 72 L71 100 H29 Z" fill="#0a0a14"/>
+  <!-- 紫の装飾 -->
+  <path d="M40 72 Q50 76 60 72" stroke="#6a40c8" stroke-width="3" fill="none"/>
+  <!-- 苦無 -->
+  <line x1="62" y1="60" x2="72" y2="70" stroke="#a0a0c0" stroke-width="2"/>
+  <polygon points="72,68 74,72 70,72" fill="#a0a0c0"/>
+</svg>

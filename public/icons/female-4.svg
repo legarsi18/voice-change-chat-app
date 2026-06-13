@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <circle cx="50" cy="50" r="50" fill="#140a00"/>
+  <!-- 髪（商人・まとめ髪） -->
+  <ellipse cx="50" cy="32" rx="20" ry="17" fill="#1a0808"/>
+  <ellipse cx="50" cy="20" rx="10" ry="8" fill="#1a0808"/>
+  <!-- かんざし -->
+  <line x1="44" y1="18" x2="38" y2="10" stroke="#c8962a" stroke-width="1.5"/>
+  <circle cx="38" cy="10" r="3" fill="#e5b84a"/>
+  <line x1="56" y1="18" x2="62" y2="10" stroke="#c8962a" stroke-width="1.5"/>
+  <circle cx="62" cy="10" r="3" fill="#e5b84a"/>
+  <!-- 顔（丸みのある） -->
+  <ellipse cx="50" cy="53" rx="18" ry="19" fill="#f0c890"/>
+  <!-- 目（たれ目・人懐っこい） -->
+  <path d="M39 50 Q43 53 47 50" stroke="#1a0808" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M53 50 Q57 53 61 50" stroke="#1a0808" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <!-- ほっぺ -->
+  <ellipse cx="40" cy="57" rx="5" ry="3" fill="#e07080" opacity="0.4"/>
+  <ellipse cx="60" cy="57" rx="5" ry="3" fill="#e07080" opacity="0.4"/>
+  <!-- 口（笑顔） -->
+  <path d="M44 62 Q50 67 56 62" stroke="#c05060" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <!-- 着物（商人風・地味め） -->
+  <path d="M32 73 Q50 81 68 73 L69 100 H31 Z" fill="#4a6040"/>
+  <rect x="31" y="72" width="38" height="4" rx="2" fill="#8a7020"/>
+  <!-- そろばん -->
+  <rect x="58" y="60" width="14" height="10" rx="2" fill="#8a6030" opacity="0.8"/>
+  <line x1="60" y1="62" x2="70" y2="62" stroke="#c8a050" stroke-width="1"/>
+  <line x1="60" y1="65" x2="70" y2="65" stroke="#c8a050" stroke-width="1"/>
+  <line x1="60" y1="68" x2="70" y2="68" stroke="#c8a050" stroke-width="1"/>
+</svg>

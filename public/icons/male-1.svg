@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <circle cx="50" cy="50" r="50" fill="#1e1e2a"/>
+  <!-- 兜（武将） -->
+  <rect x="28" y="18" width="44" height="8" rx="3" fill="#c8962a"/>
+  <rect x="22" y="24" width="56" height="4" rx="2" fill="#e5b84a"/>
+  <!-- 顔 -->
+  <circle cx="50" cy="52" r="20" fill="#d4956a"/>
+  <!-- 目 -->
+  <ellipse cx="43" cy="49" rx="3" ry="3.5" fill="#2a1a0a"/>
+  <ellipse cx="57" cy="49" rx="3" ry="3.5" fill="#2a1a0a"/>
+  <!-- 眉（太い・威厳） -->
+  <rect x="38" y="43" width="12" height="3" rx="1.5" fill="#3a2010"/>
+  <rect x="50" y="43" width="12" height="3" rx="1.5" fill="#3a2010"/>
+  <!-- 口 -->
+  <path d="M43 60 Q50 65 57 60" stroke="#3a2010" stroke-width="2" fill="none"/>
+  <!-- 鎧の首元 -->
+  <path d="M30 72 Q50 80 70 72 L72 100 H28 Z" fill="#c8962a"/>
+  <rect x="28" y="72" width="44" height="4" rx="2" fill="#e5b84a"/>
+</svg>

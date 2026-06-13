@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <circle cx="50" cy="50" r="50" fill="#0d0d1a"/>
+  <!-- 髪（巫女・おさげ） -->
+  <ellipse cx="50" cy="32" rx="20" ry="17" fill="#0a0808"/>
+  <rect x="30" y="30" width="40" height="10" rx="0" fill="#0a0808"/>
+  <rect x="30" y="60" width="8" height="20" rx="4" fill="#0a0808"/>
+  <rect x="62" y="60" width="8" height="20" rx="4" fill="#0a0808"/>
+  <!-- 顔 -->
+  <ellipse cx="50" cy="52" rx="18" ry="20" fill="#f0d0b0"/>
+  <!-- 目（丸い・明るい） -->
+  <circle cx="43" cy="49" r="3.5" fill="#1a0808"/>
+  <circle cx="57" cy="49" r="3.5" fill="#1a0808"/>
+  <circle cx="44" cy="48" r="1" fill="#fff"/>
+  <circle cx="58" cy="48" r="1" fill="#fff"/>
+  <!-- 眉 -->
+  <path d="M39 44 Q43 42 47 44" stroke="#2a1818" stroke-width="1.5" fill="none"/>
+  <path d="M53 44 Q57 42 61 44" stroke="#2a1818" stroke-width="1.5" fill="none"/>
+  <!-- 口（笑顔） -->
+  <path d="M44 60 Q50 65 56 60" stroke="#c86880" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <!-- 巫女装束 -->
+  <path d="M32 72 Q50 80 68 72 L69 100 H31 Z" fill="#f0f0f0"/>
+  <rect x="31" y="72" width="38" height="4" rx="2" fill="#c82020"/>
+  <!-- 赤袴 -->
+  <path d="M32 76 Q50 82 68 76 L68 100 H32 Z" fill="#c82020"/>
+</svg>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <circle cx="50" cy="50" r="50" fill="#14141e"/>
+  <!-- 烏帽子（軍師） -->
+  <ellipse cx="50" cy="30" rx="18" ry="16" fill="#2a2a4a"/>
+  <rect x="44" y="14" width="12" height="20" rx="4" fill="#2a2a4a"/>
+  <rect x="46" y="10" width="8" height="8" rx="2" fill="#3a3a6a"/>
+  <!-- 顔（知性的） -->
+  <circle cx="50" cy="54" r="19" fill="#c8a070"/>
+  <!-- 目（細い・考え込む） -->
+  <path d="M40 51 Q43 49 46 51" stroke="#2a1a0a" stroke-width="2" fill="none"/>
+  <path d="M54 51 Q57 49 60 51" stroke="#2a1a0a" stroke-width="2" fill="none"/>
+  <!-- ひげ -->
+  <path d="M42 62 Q50 66 58 62" stroke="#5a4030" stroke-width="2" fill="none"/>
+  <path d="M45 64 Q50 67 55 64" stroke="#5a4030" stroke-width="1.5" fill="none"/>
+  <!-- 眉（細い） -->
+  <path d="M39 47 Q43 45 47 47" stroke="#3a2010" stroke-width="1.5" fill="none"/>
+  <path d="M53 47 Q57 45 61 47" stroke="#3a2010" stroke-width="1.5" fill="none"/>
+  <!-- 衣装 -->
+  <path d="M31 73 Q50 82 69 73 L70 100 H30 Z" fill="#2a2a4a"/>
+  <rect x="44" y="73" width="12" height="4" fill="#4a4a8a"/>
+</svg>
