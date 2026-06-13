@@ -56,8 +56,12 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // POST /api/rooms → ルーム作成
+    // POST /api/rooms → ルーム作成（管理者パスワード必須）
     if (path === '/api/rooms' && request.method === 'POST') {
+      const body = await request.json().catch(() => ({}));
+      if (!env.CREATE_PASSWORD || body.password !== env.CREATE_PASSWORD) {
+        return json({ error: 'パスワードが違います' }, 403);
+      }
       const roomId = crypto.randomUUID();
       const token = generateToken();
 

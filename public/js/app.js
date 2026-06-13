@@ -2,11 +2,10 @@ import { VoiceChanger, VOICE_PRESETS } from './voice-changer.js';
 import { RoomClient } from './room.js';
 
 const WORKER_URL = 'https://voice-chat-worker.legarsi-18k.workers.dev';
-
-// ローカルストレージキー
 const STORAGE_KEY = 'voice_chat_profile';
+const SESSION_KEY = 'voice_chat_session';
+const ROOM_MAX_MS = 3 * 60 * 60 * 1000; // 3時間
 
-// 状態
 let profile = loadProfile();
 let voiceChanger = null;
 let roomClient = null;
@@ -16,21 +15,29 @@ let isMuted = false;
 // プロフィール永続化
 // ───────────────────────────────────────────
 function loadProfile() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || defaultProfile(); }
+  catch { return defaultProfile(); }
+}
+function defaultProfile() { return { name: '', voice: 'none', icon: 'male-1' }; }
+function saveProfile(p) { localStorage.setItem(STORAGE_KEY, JSON.stringify(p)); }
+
+// セッション情報をlocalStorageで保持（iOSのページリロード対策）
+function saveSession(data) {
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ ...data, savedAt: Date.now() }));
+}
+function loadSession(roomId) {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || defaultProfile();
-  } catch {
-    return defaultProfile();
-  }
+    const data = JSON.parse(localStorage.getItem(SESSION_KEY));
+    if (!data) return null;
+    if (data.roomId !== roomId) return null;
+    if (Date.now() - data.savedAt > 10 * 60 * 1000) return null; // 10分で無効化
+    return data;
+  } catch { return null; }
 }
-function defaultProfile() {
-  return { name: '', voice: 'none', icon: 'male-1' };
-}
-function saveProfile(p) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
-}
+function clearSession() { localStorage.removeItem(SESSION_KEY); }
 
 // ───────────────────────────────────────────
-// ルーティング（ハッシュベース）
+// ルーティング
 // ───────────────────────────────────────────
 function route() {
   const hash = location.hash || '#/';
@@ -40,7 +47,7 @@ function route() {
     renderHome(app);
   } else {
     const lobbyMatch = hash.match(/^#\/room\/([^/]+)\/lobby(\?.*)?$/);
-    const roomMatch = hash.match(/^#\/room\/([^/]+)$/);
+    const roomMatch  = hash.match(/^#\/room\/([^/]+)$/);
 
     if (lobbyMatch) {
       const roomId = lobbyMatch[1];
@@ -58,24 +65,39 @@ window.addEventListener('hashchange', route);
 window.addEventListener('DOMContentLoaded', route);
 
 // ───────────────────────────────────────────
-// ホーム画面（ルーム作成）
+// ホーム画面（管理者パスワード付きルーム作成）
 // ───────────────────────────────────────────
 function renderHome(app) {
   app.innerHTML = `
     <div class="screen home-screen">
       <div class="logo">⚔️ 作戦会議</div>
       <p class="subtitle">招待URLを発行してメンバーを招集</p>
+      <div class="section">
+        <label class="section-label" for="pwInput">管理者パスワード</label>
+        <input class="input" id="pwInput" type="password" placeholder="パスワードを入力">
+      </div>
       <button class="btn btn-primary" id="createBtn">ルームを作成する</button>
     </div>
   `;
 
   document.getElementById('createBtn').addEventListener('click', async () => {
+    const password = document.getElementById('pwInput').value;
+    if (!password) { alert('パスワードを入力してください'); return; }
+
     const btn = document.getElementById('createBtn');
     btn.disabled = true;
     btn.textContent = '作成中…';
 
     try {
-      const res = await fetch(`${WORKER_URL}/api/rooms`, { method: 'POST' });
+      const res = await fetch(`${WORKER_URL}/api/rooms`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'ルーム作成に失敗しました');
+      }
       const { roomId, token } = await res.json();
       const inviteUrl = `${location.origin}${location.pathname}#/room/${roomId}/lobby?t=${token}`;
 
@@ -104,19 +126,16 @@ function renderHome(app) {
     } catch (err) {
       btn.disabled = false;
       btn.textContent = 'ルームを作成する';
-      alert('ルーム作成に失敗しました。Worker URLを確認してください。');
+      alert(err.message);
     }
   });
 }
 
 // ───────────────────────────────────────────
-// ロビー画面（参加前設定）
+// ロビー画面
 // ───────────────────────────────────────────
 function renderLobby(app, roomId, token) {
-  const iconOptions = [
-    'male-1', 'male-2', 'male-3', 'male-4',
-    'female-1', 'female-2', 'female-3', 'female-4',
-  ];
+  const iconOptions = ['male-1','male-2','male-3','male-4','female-1','female-2','female-3','female-4'];
 
   const voiceOptions = Object.entries(VOICE_PRESETS).map(([key, p]) => `
     <label class="voice-option ${profile.voice === key ? 'selected' : ''}">
@@ -157,7 +176,9 @@ function renderLobby(app, roomId, token) {
       <section class="section">
         <label class="section-label">ボイス</label>
         <div class="voice-grid">${voiceOptions}</div>
-        <button class="btn btn-secondary btn-small" id="testVoice">▶ テスト再生</button>
+        <button class="btn btn-secondary btn-small" id="testVoice">▶ テスト（3秒間マイク入力を再生）</button>
+        <div id="testStatus" class="test-status"></div>
+        <p class="test-note">※ イヤホン推奨。スピーカーだとハウリングします</p>
       </section>
 
       <button class="btn btn-primary" id="joinBtn">ルームに参加する</button>
@@ -177,7 +198,6 @@ function renderLobby(app, roomId, token) {
     });
   });
 
-  // アイコンアップロード
   document.getElementById('iconUpload').addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -195,7 +215,6 @@ function renderLobby(app, roomId, token) {
     document.querySelector('[data-icon="male-1"]')?.classList.add('selected');
   });
 
-  // ボイス選択
   document.querySelectorAll('input[name="voice"]').forEach(radio => {
     radio.addEventListener('change', (e) => {
       document.querySelectorAll('.voice-option').forEach(o => o.classList.remove('selected'));
@@ -204,19 +223,39 @@ function renderLobby(app, roomId, token) {
     });
   });
 
-  // テスト再生
+  // テスト再生（マイク→ボイスチェンジャー→スピーカーに3秒間流す）
   document.getElementById('testVoice').addEventListener('click', async () => {
+    const btn = document.getElementById('testVoice');
+    const status = document.getElementById('testStatus');
+    btn.disabled = true;
+    status.textContent = 'マイクを起動中…';
+
+    let vc = null;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const vc = new VoiceChanger();
+      vc = new VoiceChanger();
       const out = await vc.init(stream);
-      await vc.setPreset(profile.voice);
-      const audio = new Audio();
+      vc.setPreset(profile.voice);
+      await vc.resume();
+
+      const audio = document.createElement('audio');
       audio.srcObject = out;
-      audio.play();
-      setTimeout(() => { audio.pause(); vc.destroy(); }, 3000);
-    } catch {
-      alert('マイクへのアクセスを許可してください');
+      audio.muted = false;
+      audio.volume = 1.0;
+      document.body.appendChild(audio);
+      await audio.play();
+
+      status.textContent = '🎤 再生中（3秒）… イヤホンで自分の声が聞こえれば正常です';
+
+      await new Promise(r => setTimeout(r, 3000));
+      audio.pause();
+      audio.remove();
+      status.textContent = '✅ テスト完了';
+    } catch (err) {
+      status.textContent = '❌ エラー: ' + (err.message || 'マイクを許可してください');
+    } finally {
+      vc?.destroy();
+      btn.disabled = false;
     }
   });
 
@@ -226,9 +265,7 @@ function renderLobby(app, roomId, token) {
     if (!name) { alert('表示名を入力してください'); return; }
 
     profile.name = name;
-    if (uploadedIconData) {
-      profile.iconData = uploadedIconData;
-    }
+    if (uploadedIconData) profile.iconData = uploadedIconData;
     saveProfile(profile);
 
     const btn = document.getElementById('joinBtn');
@@ -238,18 +275,19 @@ function renderLobby(app, roomId, token) {
     try {
       const res = await fetch(`${WORKER_URL}/api/rooms/${roomId}/join?t=${token}`);
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || '参加に失敗しました');
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `接続エラー (${res.status})`);
       }
       const { sessionId } = await res.json();
+      if (!sessionId) throw new Error('セッションIDが取得できませんでした');
 
-      // sessionIdをstate経由でroom画面へ渡す
-      sessionStorage.setItem('session', JSON.stringify({ sessionId, roomId, token }));
+      // localStorageに保存（iOSのページリロード対策）
+      saveSession({ sessionId, roomId, token, joinedAt: Date.now() });
       location.hash = `#/room/${roomId}`;
     } catch (err) {
       btn.disabled = false;
       btn.textContent = 'ルームに参加する';
-      alert(err.message);
+      alert(`参加に失敗しました: ${err.message}`);
     }
   });
 }
@@ -258,10 +296,10 @@ function renderLobby(app, roomId, token) {
 // 通話画面
 // ───────────────────────────────────────────
 async function renderRoom(app, roomId) {
-  const sessionData = JSON.parse(sessionStorage.getItem('session') || 'null');
-  if (!sessionData || sessionData.roomId !== roomId) {
-    // sessionがなければロビーに戻す（直接URLアクセス対策）
+  const sessionData = loadSession(roomId);
+  if (!sessionData) {
     alert('招待URLからアクセスしてください');
+    clearSession();
     location.hash = '#/';
     return;
   }
@@ -271,6 +309,7 @@ async function renderRoom(app, roomId) {
       <header class="room-header">
         <span class="room-title">⚔️ 作戦会議</span>
         <span class="participant-count" id="pCount">1人</span>
+        <span class="room-timer" id="roomTimer">0:00:00</span>
       </header>
 
       <div class="participants-grid" id="participants"></div>
@@ -299,36 +338,55 @@ async function renderRoom(app, roomId) {
     </div>
   `;
 
-  // 自分のアイコン画像を決定
   const selfIconSrc = profile.icon === 'custom' && profile.iconData
-    ? profile.iconData
-    : `/icons/${profile.icon}.svg`;
+    ? profile.iconData : `/icons/${profile.icon}.svg`;
 
-  // 自分のカードを追加
-  addParticipantCard({
-    clientId: 'self',
-    name: profile.name,
-    voice: profile.voice,
-    iconSrc: selfIconSrc,
-    isSelf: true,
-  });
+  addParticipantCard({ clientId: 'self', name: profile.name, voice: profile.voice, iconSrc: selfIconSrc, isSelf: true });
 
-  // マイク取得 → ボイスチェンジャー初期化
+  // 経過時間タイマー
+  const joinedAt = sessionData.joinedAt || Date.now();
+  const timerInterval = setInterval(() => {
+    const elapsed = Date.now() - joinedAt;
+    const h = Math.floor(elapsed / 3600000);
+    const m = Math.floor((elapsed % 3600000) / 60000);
+    const s = Math.floor((elapsed % 60000) / 1000);
+    const el = document.getElementById('roomTimer');
+    if (el) el.textContent = `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+
+    // 3時間で警告
+    if (elapsed >= ROOM_MAX_MS && el) {
+      el.style.color = '#c84040';
+      el.textContent += ' ⚠️';
+      if (elapsed === ROOM_MAX_MS || (elapsed - ROOM_MAX_MS < 1000)) {
+        alert('3時間が経過しました。ルームを終了することをおすすめします。');
+      }
+    }
+  }, 1000);
+
+  // マイク取得
   let micStream;
   try {
     micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-  } catch {
-    alert('マイクへのアクセスを許可してください');
+  } catch (err) {
+    clearInterval(timerInterval);
+    alert(`マイクへのアクセスを許可してください (${err.message})`);
     location.hash = '#/';
     return;
   }
 
   voiceChanger = new VoiceChanger();
-  const processedStream = await voiceChanger.init(micStream);
-  voiceChanger.setPreset(profile.voice);
-  await voiceChanger.resume();
+  let processedStream;
+  try {
+    processedStream = await voiceChanger.init(micStream);
+    voiceChanger.setPreset(profile.voice);
+    await voiceChanger.resume();
+  } catch (err) {
+    clearInterval(timerInterval);
+    alert(`音声初期化エラー: ${err.message}`);
+    location.hash = '#/';
+    return;
+  }
 
-  // RoomClient 初期化
   roomClient = new RoomClient({
     roomId,
     sessionId: sessionData.sessionId,
@@ -336,10 +394,17 @@ async function renderRoom(app, roomId) {
     onEvent: handleRoomEvent,
   });
 
-  await roomClient.connect(processedStream);
+  try {
+    await roomClient.connect(processedStream);
+  } catch (err) {
+    clearInterval(timerInterval);
+    alert(`ルーム接続エラー: ${err.message}`);
+    voiceChanger.destroy();
+    location.hash = '#/';
+    return;
+  }
 
-  // ─── UIイベント ───
-
+  // UIイベント
   document.getElementById('voiceSelect').addEventListener('change', (e) => {
     profile.voice = e.target.value;
     voiceChanger.setPreset(profile.voice);
@@ -356,12 +421,12 @@ async function renderRoom(app, roomId) {
   });
 
   document.getElementById('memoSend').addEventListener('click', sendMemo);
-  document.getElementById('memoInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') sendMemo();
-  });
+  document.getElementById('memoInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendMemo(); });
 
   document.getElementById('leaveBtn').addEventListener('click', () => {
     if (confirm('退出しますか？')) {
+      clearInterval(timerInterval);
+      clearSession();
       roomClient.destroy();
       voiceChanger.destroy();
       location.hash = '#/';
@@ -384,36 +449,29 @@ function handleRoomEvent(event) {
   switch (event.type) {
     case 'init':
       event.participants.forEach(p => {
-        if (p.clientId !== roomClient.userMeta.clientId) {
+        if (p.clientId !== roomClient.userMeta.clientId)
           addParticipantCard({ ...p, iconSrc: iconSrc(p) });
-        }
       });
       event.memos.forEach(m => addMemoItem(m));
       updateParticipantCount();
       break;
-
     case 'peer_joined':
       addParticipantCard({ ...event.participant, iconSrc: iconSrc(event.participant) });
       updateParticipantCount();
       break;
-
     case 'peer_left':
       document.getElementById(`card-${event.clientId}`)?.remove();
       updateParticipantCount();
       break;
-
     case 'peer_speaking':
       document.getElementById(`card-${event.clientId}`)?.classList.toggle('speaking', event.value);
       break;
-
     case 'self_speaking':
       document.getElementById('card-self')?.classList.toggle('speaking', event.value);
       break;
-
     case 'memo':
       addMemoItem(event.memo);
       break;
-
     case 'peer_voice_changed': {
       const label = document.querySelector(`#card-${event.clientId} .card-voice`);
       if (label) label.textContent = VOICE_PRESETS[event.voice]?.label || '';
@@ -428,11 +486,8 @@ function handleRoomEvent(event) {
 function addParticipantCard({ clientId, name, voice, iconSrc, isSelf = false }) {
   const grid = document.getElementById('participants');
   if (!grid) return;
-
   const id = isSelf ? 'self' : clientId;
-  const existing = document.getElementById(`card-${id}`);
-  if (existing) return;
-
+  if (document.getElementById(`card-${id}`)) return;
   const card = document.createElement('div');
   card.className = 'participant-card';
   card.id = `card-${id}`;
@@ -479,20 +534,16 @@ function escapeHtml(str) {
   );
 }
 
-// 画像リサイズ（Canvas API）
 function resizeImage(file, size) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
       const canvas = document.createElement('canvas');
-      canvas.width = size;
-      canvas.height = size;
+      canvas.width = size; canvas.height = size;
       const ctx = canvas.getContext('2d');
       const s = Math.min(img.width, img.height);
-      const ox = (img.width - s) / 2;
-      const oy = (img.height - s) / 2;
-      ctx.drawImage(img, ox, oy, s, s, 0, 0, size, size);
+      ctx.drawImage(img, (img.width-s)/2, (img.height-s)/2, s, s, 0, 0, size, size);
       URL.revokeObjectURL(url);
       resolve(canvas.toDataURL('image/jpeg', 0.85));
     };
