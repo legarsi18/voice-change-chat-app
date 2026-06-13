@@ -79,13 +79,15 @@ export default {
       return json({ roomId, token });
     }
 
-    // GET /api/rooms/:roomId/join?t=token → 参加検証 + CFセッション作成
+    // POST /api/rooms/:roomId/join → 参加検証 + CFセッション作成
     const joinMatch = path.match(/^\/api\/rooms\/([^/]+)\/join$/);
-    if (joinMatch && request.method === 'GET') {
+    if (joinMatch && request.method === 'POST') {
       const roomId = joinMatch[1];
-      const token = url.searchParams.get('t');
+      const body = await request.json().catch(() => ({}));
+      const token = body.token;
 
       if (!token || !(await validateToken(env, token, roomId))) {
+        console.error('[join] token validation failed. roomId:', roomId, 'token:', token);
         return json({ error: '招待リンクが無効か期限切れです' }, 401);
       }
 

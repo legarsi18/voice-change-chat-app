@@ -58,7 +58,10 @@ export class VoiceChanger {
 
     this.destinationNode = this.audioContext.createMediaStreamDestination();
 
-    this._buildGraph('none');
+    // モニタリング用（テスト再生時にスピーカーから聞こえるようにする）
+    this.speakerGain = this.audioContext.createGain();
+    this.speakerGain.gain.value = 0; // 通常時はミュート
+    this.speakerGain.connect(this.audioContext.destination);
 
     // iOS バックグラウンド対策：無音オシレーターを常時起動
     const keepAlive = this.audioContext.createOscillator();
@@ -67,6 +70,8 @@ export class VoiceChanger {
     keepAlive.connect(keepAliveGain);
     keepAliveGain.connect(this.audioContext.destination);
     keepAlive.start();
+
+    this._buildGraph('none');
 
     this.outputStream = this.destinationNode.stream;
     return this.outputStream;
@@ -142,6 +147,7 @@ export class VoiceChanger {
     }
 
     this.compressor.connect(this.destinationNode);
+    this.compressor.connect(this.speakerGain);
   }
 
   _createImpulseResponse(duration, decay) {
@@ -155,6 +161,12 @@ export class VoiceChanger {
       }
     }
     return impulse;
+  }
+
+  setMonitor(enabled) {
+    if (this.speakerGain) {
+      this.speakerGain.gain.value = enabled ? 1.0 : 0;
+    }
   }
 
   async resume() {

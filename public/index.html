@@ -26,11 +26,7 @@
       navigator.serviceWorker.register('/sw.js');
     }
 
-    // ユーザージェスチャー後に無音音声を再生してiOSのバックグラウンド再生を有効化
-    document.addEventListener('click', () => {
-      const ka = document.getElementById('keepalive');
-      if (ka.paused) ka.play().catch(() => {});
-    }, { once: true });
+    // keepaliveはルーム入室時に app.js 側で開始する
   </script>
 </body>
 </html>

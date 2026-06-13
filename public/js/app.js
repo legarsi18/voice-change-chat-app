@@ -10,6 +10,7 @@ let profile = loadProfile();
 let voiceChanger = null;
 let roomClient = null;
 let isMuted = false;
+let testMicStream = null; // マイクテスト用ストリームをキャッシュ（iOS許可を使い回す）
 
 // ───────────────────────────────────────────
 // プロフィール永続化
@@ -224,37 +225,51 @@ function renderLobby(app, roomId, token) {
   });
 
   // テスト再生（マイク→ボイスチェンジャー→スピーカーに3秒間流す）
+  let testVc = null;
   document.getElementById('testVoice').addEventListener('click', async () => {
     const btn = document.getElementById('testVoice');
     const status = document.getElementById('testStatus');
     btn.disabled = true;
-    status.textContent = 'マイクを起動中…';
 
-    let vc = null;
+    // 前回のテスト用VoiceChangerを閉じる（ストリームは閉じない）
+    if (testVc) {
+      testVc.setMonitor(false);
+      testVc.audioContext?.close().catch(() => {});
+      testVc = null;
+    }
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      vc = new VoiceChanger();
-      const out = await vc.init(stream);
-      vc.setPreset(profile.voice);
-      await vc.resume();
+      // マイクストリームをキャッシュして毎回許可ダイアログが出ないようにする
+      if (!testMicStream || testMicStream.getTracks().every(t => t.readyState === 'ended')) {
+        status.textContent = 'マイクを起動中…';
+        testMicStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      }
 
-      const audio = document.createElement('audio');
-      audio.srcObject = out;
-      audio.muted = false;
-      audio.volume = 1.0;
-      document.body.appendChild(audio);
-      await audio.play();
+      status.textContent = '音声エンジンを起動中…';
+      testVc = new VoiceChanger();
+      await testVc.init(testMicStream);
+      testVc.setPreset(profile.voice);
+      await testVc.resume();
+
+      // スピーカーに直接接続（audio.srcObject方式はiOSのautoplay制限を受けるため使わない）
+      testVc.setMonitor(true);
 
       status.textContent = '🎤 再生中（3秒）… イヤホンで自分の声が聞こえれば正常です';
-
       await new Promise(r => setTimeout(r, 3000));
-      audio.pause();
-      audio.remove();
+
+      testVc.setMonitor(false);
       status.textContent = '✅ テスト完了';
     } catch (err) {
-      status.textContent = '❌ エラー: ' + (err.message || 'マイクを許可してください');
+      console.error('[testVoice] error:', err);
+      status.textContent = '❌ ' + (err.name === 'NotAllowedError'
+        ? 'マイクへのアクセスを許可してください'
+        : err.name === 'NotFoundError'
+          ? 'マイクが見つかりません'
+          : `エラー: ${err.message}`);
+      // エラー時はストリームをリセット（次回再取得させる）
+      testMicStream?.getTracks().forEach(t => t.stop());
+      testMicStream = null;
     } finally {
-      vc?.destroy();
       btn.disabled = false;
     }
   });
@@ -273,16 +288,25 @@ function renderLobby(app, roomId, token) {
     btn.textContent = '接続中…';
 
     try {
-      const res = await fetch(`${WORKER_URL}/api/rooms/${roomId}/join?t=${token}`);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `接続エラー (${res.status})`);
-      }
-      const { sessionId } = await res.json();
-      if (!sessionId) throw new Error('セッションIDが取得できませんでした');
+      console.log('[join] roomId:', roomId, 'token:', token);
+      if (!token) throw new Error('招待トークンが見つかりません。招待URLを使って開いてください');
+
+      // テスト用ストリームを解放してからルームに入る
+      testMicStream?.getTracks().forEach(t => t.stop());
+      testMicStream = null;
+
+      const res = await fetch(`${WORKER_URL}/api/rooms/${roomId}/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+      });
+      const data = await res.json().catch(() => ({}));
+      console.log('[join] response:', res.status, data);
+      if (!res.ok) throw new Error(data.error || `接続エラー (${res.status})`);
+      if (!data.sessionId) throw new Error('セッションIDが取得できませんでした');
 
       // localStorageに保存（iOSのページリロード対策）
-      saveSession({ sessionId, roomId, token, joinedAt: Date.now() });
+      saveSession({ sessionId: data.sessionId, roomId, token, joinedAt: Date.now() });
       location.hash = `#/room/${roomId}`;
     } catch (err) {
       btn.disabled = false;
@@ -362,6 +386,10 @@ async function renderRoom(app, roomId) {
       }
     }
   }, 1000);
+
+  // ルーム入室時にiOS keepaliveを開始（ホーム画面では発火させない）
+  const keepalive = document.getElementById('keepalive');
+  if (keepalive?.paused) keepalive.play().catch(() => {});
 
   // マイク取得
   let micStream;
