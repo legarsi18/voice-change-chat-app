@@ -9,12 +9,12 @@ class_name = "RoomDurableObject"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["RoomDurableObject"]
+new_sqlite_classes = ["RoomDurableObject"]
 
 [[kv_namespaces]]
 binding = "KV"
-id = "REPLACE_WITH_YOUR_KV_ID"
-preview_id = "REPLACE_WITH_YOUR_KV_PREVIEW_ID"
+id = "27ea6ae240184c0da7c441f95b6992c8"
+preview_id = "27ea6ae240184c0da7c441f95b6992c8"
 
 # シークレットは以下コマンドで設定（wrangler.tomlには書かない）
 # wrangler secret put CF_APP_ID

@@ -1,7 +1,7 @@
 import { VoiceChanger, VOICE_PRESETS } from './voice-changer.js';
 import { RoomClient } from './room.js';
 
-const WORKER_URL = '__WORKER_URL__';
+const WORKER_URL = 'https://voice-chat-worker.legarsi-18k.workers.dev';
 
 // ローカルストレージキー
 const STORAGE_KEY = 'voice_chat_profile';
