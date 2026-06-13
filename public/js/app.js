@@ -1,7 +1,7 @@
 import { VoiceChanger, VOICE_PRESETS } from './voice-changer.js';
 import { RoomClient } from './room.js';
 
-const WORKER_URL = 'https://voice-chat-worker.legarsi-18k.workers.dev';
+const WORKER_URL = ''; // _worker.js が同一オリジンでプロキシするため相対パスで良い
 const STORAGE_KEY = 'voice_chat_profile';
 const SESSION_KEY = 'voice_chat_session';
 const ROOM_MAX_MS = 3 * 60 * 60 * 1000; // 3時間

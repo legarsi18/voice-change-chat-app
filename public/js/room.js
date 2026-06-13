@@ -1,6 +1,6 @@
 // WebRTC + Cloudflare Realtime + Durable Objects WebSocket の統合管理
 
-const WORKER_URL = 'https://voice-chat-worker.legarsi-18k.workers.dev'; // デプロイ時に実際のWorker URLに置き換える
+const WORKER_URL = ''; // _worker.js が同一オリジンでプロキシするため相対パスで良い
 
 export class RoomClient {
   constructor({ roomId, sessionId, userMeta, onEvent }) {
@@ -28,7 +28,7 @@ export class RoomClient {
   }
 
   async _connectSignaling() {
-    const wsUrl = new URL(`${WORKER_URL}/api/rooms/${this.roomId}/ws`);
+    const wsUrl = new URL(`/api/rooms/${this.roomId}/ws`, location.href);
     wsUrl.protocol = wsUrl.protocol.replace('http', 'ws');
     wsUrl.searchParams.set('name', this.userMeta.name);
     wsUrl.searchParams.set('voice', this.userMeta.voice);
