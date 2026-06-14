@@ -1,24 +1,26 @@
 // ボイスチェンジャー
-// 位相ボコーダー（AudioWorklet）+ 軽量 EQ
+// 位相ボコーダー（ピッチ独立）+ フォルマントシフト（声道独立）+ EQ
 //
-// 【設計方針】
-//   • ピッチ変化は最小限（±1〜4 半音）：大きなシフトほどロボット感が出る
-//   • EQ ゲインは ±3dB 以内：それ以上はこもり感・ビー音の原因になる
-//   • リバーブは使用しない：声のコピー感・エコーの直接原因
-//   • サチュレーション・リングモジュレーターは使用しない：ノイズ源
+// 【アニメ・ゲームキャラクター声の設計原則】
+//   声のキャラクターは「ピッチ」だけでなく「フォルマント」で決まる。
+//   フォルマント = 声道の共鳴周波数 = 声帯の長さ・形で決まる音色の核心。
 //
-// 【プリセット一覧】
-//   none    : エフェクトなし（パススルー）
-//   male1   : 男声 ふつう  (-2 半音)
-//   male2   : 男声 低め   (-3 半音)
-//   female1 : 女声 ふつう  (+2 半音)
-//   female2 : 女声 高め   (+3 半音)
+//   formantRatio < 1.0 : 声道が長い（体が大きい/渋い男性）→ 低く響く
+//   formantRatio > 1.0 : 声道が短い（体が小さい/アニメ女性）→ 明るく細い
+//
+// 【プリセット設計】
+//   none     : エフェクトなし
+//   male1    : 男性 普通    ─ 少し低め、自然な男性キャラ
+//   male2    : 男性 クール  ─ 深みのある渋い男性（声道も長く）
+//   female1  : 女性 普通    ─ 少し高め、落ち着いたお姉さん系
+//   female2  : 女性 アニメ  ─ アニメキャラ風（声道も短くフォルマント高め）
 
 export const VOICE_PRESETS = {
   none: {
     label: '素の声',
     description: 'エフェクトなし',
-    pitchRatio: 1.0,
+    pitchRatio:   1.0,
+    formantRatio: 1.0,
     hpFreq: null,
     lsFreq: 200, lsGain: 0,
     pkFreq: null, pkGain: 0,
@@ -26,49 +28,61 @@ export const VOICE_PRESETS = {
   },
 
   male1: {
-    label: '男声 ふつう',
-    description: '少し低めの男性の声',
-    pitchRatio: 0.891,   // -2 半音: 2^(-2/12)
+    label: '男性 普通',
+    description: '少し低めの自然な男性キャラ',
+    // ピッチ: -2 半音 → 少し低い
+    pitchRatio: 0.891,
+    // フォルマント: -8% → 声道が少し長い（やや体格のある男性）
+    formantRatio: 0.92,
     hpFreq: null,
-    lsFreq: 250, lsGain:  2,   // わずかな低域の温かみ
-    pkFreq: 600, pkGain:  2,   // 胸声帯域をほんのり強調
-    hsFreq: 5000, hsGain: -1,  // 高域を少しだけ落ち着かせる
+    lsFreq: 250, lsGain:  2,   // 低域の温かみ
+    pkFreq: 2200, pkGain:  3,  // プレゼンス（声が前に出る）
+    hsFreq: 5000, hsGain: -1,
   },
 
   male2: {
-    label: '男声 低め',
-    description: '深みのある男性の声',
-    pitchRatio: 0.840,   // -3 半音: 2^(-3/12)
+    label: '男性 クール',
+    description: '渋くて深みのある男性キャラ',
+    // ピッチ: -4 半音 → かなり低い
+    pitchRatio: 0.794,
+    // フォルマント: -22% → 大柄な声道（ゲームの主人公・渋いキャラ系）
+    // ピッチとフォルマントを両方下げることで「別人感」が出る
+    formantRatio: 0.78,
     hpFreq: null,
-    lsFreq: 250, lsGain:  3,   // 低域の重みを追加
-    pkFreq: 500, pkGain:  2,
+    lsFreq: 200, lsGain:  3,   // 重みのある低域
+    pkFreq: 1800, pkGain:  3,  // 中域プレゼンス（低くても聞こえやすく）
     hsFreq: 5000, hsGain: -2,
   },
 
   female1: {
-    label: '女声 ふつう',
-    description: '自然な高さの女性の声',
-    pitchRatio: 1.122,   // +2 半音: 2^(2/12)
-    hpFreq: 150,         // 低域のもこもこ感を除去
+    label: '女性 普通',
+    description: '落ち着いた大人の女性キャラ',
+    // ピッチ: +2 半音 → 少し高い
+    pitchRatio: 1.122,
+    // フォルマント: +12% → 声道が少し短い（女性的な明るさ）
+    formantRatio: 1.12,
+    hpFreq: 160,
     lsFreq: 200, lsGain: -1,
-    pkFreq: 2500, pkGain:  2,  // 女声の明るさ・通りを少し強調
+    pkFreq: 2800, pkGain:  3,  // 透明感・通り
     hsFreq: 6000, hsGain:  1,
   },
 
   female2: {
-    label: '女声 高め',
-    description: '少し高めの女性の声',
-    pitchRatio: 1.189,   // +3 半音: 2^(3/12)
-    hpFreq: 180,
-    lsFreq: 200, lsGain: -2,
-    pkFreq: 3000, pkGain:  2,
-    hsFreq: 6000, hsGain:  1,
+    label: '女性 アニメ',
+    description: 'アニメキャラクター風の女性の声',
+    // ピッチ: +3 半音 → 高い
+    pitchRatio: 1.189,
+    // フォルマント: +32% → 大幅に短い声道（アニメキャラ特有の「金属的な明るさ」）
+    // これがアニメ声の核心。ピッチだけ上げてもアニメっぽくならない。
+    formantRatio: 1.32,
+    hpFreq: 200,
+    lsFreq: 200, lsGain: -3,   // 低域をスッキリ
+    pkFreq: 3500, pkGain:  3,  // アニメ声のキャラクター帯域
+    hsFreq: 7000, hsGain:  2,  // 空気感・抜け感
   },
 };
 
 export class VoiceChanger {
-  // externalAudioContext: iOS ではユーザージェスチャー内で
-  // new AudioContext() + resume() を同期実行して渡す必要がある
   constructor(externalAudioContext = null) {
     this._externalAudioContext = externalAudioContext;
     this.audioContext    = null;
@@ -100,14 +114,11 @@ export class VoiceChanger {
 
     const ctx = this.audioContext;
 
-    // AudioWorklet（位相ボコーダー）登録
     await ctx.audioWorklet.addModule('/js/worklets/pitch-shifter.js');
 
-    // ノード生成
     this.sourceNode = ctx.createMediaStreamSource(stream);
     this.pitchNode  = new AudioWorkletNode(ctx, 'pitch-shifter');
 
-    // EQ（4 段、軽量設計）
     this.hpFilter = ctx.createBiquadFilter();
     this.hpFilter.type    = 'highpass';
     this.hpFilter.Q.value = 0.7;
@@ -117,12 +128,11 @@ export class VoiceChanger {
 
     this.pkFilter = ctx.createBiquadFilter();
     this.pkFilter.type    = 'peaking';
-    this.pkFilter.Q.value = 0.7;  // 広帯域 → 共振しにくい
+    this.pkFilter.Q.value = 0.7;
 
     this.hsFilter = ctx.createBiquadFilter();
     this.hsFilter.type = 'highshelf';
 
-    // コンプレッサー（音量均一化・クリッピング防止）
     this.compressor = ctx.createDynamicsCompressor();
     this.compressor.threshold.value = -18;
     this.compressor.knee.value      = 12;
@@ -130,15 +140,13 @@ export class VoiceChanger {
     this.compressor.attack.value    = 0.005;
     this.compressor.release.value   = 0.15;
 
-    // 出力
     this.destinationNode = ctx.createMediaStreamDestination();
 
-    // モニタリング用（テスト再生）
     this.speakerGain = ctx.createGain();
     this.speakerGain.gain.value = 0;
     this.speakerGain.connect(ctx.destination);
 
-    // iOS バックグラウンド対策：無音オシレーター
+    // iOS バックグラウンド対策
     const kaOsc  = ctx.createOscillator();
     const kaGain = ctx.createGain();
     kaGain.gain.value = 0;
@@ -152,7 +160,6 @@ export class VoiceChanger {
   }
 
   setPreset(presetKey) {
-    // 未知のキーはデフォルト(none)にフォールバック
     const key = VOICE_PRESETS[presetKey] ? presetKey : 'none';
     this.currentPreset = key;
     this._buildGraph(key);
@@ -163,7 +170,6 @@ export class VoiceChanger {
     const ctx = this.audioContext;
     if (!ctx) return;
 
-    // 既存接続を解除
     try {
       this.sourceNode.disconnect();
       this.pitchNode.disconnect();
@@ -174,8 +180,9 @@ export class VoiceChanger {
       this.compressor.disconnect();
     } catch {}
 
-    // ピッチ設定
-    this.pitchNode.parameters.get('pitchRatio').value = p.pitchRatio;
+    // ピッチ・フォルマント設定
+    this.pitchNode.parameters.get('pitchRatio').value   = p.pitchRatio;
+    this.pitchNode.parameters.get('formantRatio').value = p.formantRatio ?? 1.0;
 
     // EQ 設定
     this.lsFilter.frequency.value = p.lsFreq  ?? 200;
@@ -185,8 +192,7 @@ export class VoiceChanger {
     this.hsFilter.frequency.value = p.hsFreq  ?? 5000;
     this.hsFilter.gain.value      = p.hsGain  ?? 0;
 
-    // グラフ接続:
-    // source → pitch → [HP] → LS → PK → HS → compressor → dest
+    // グラフ接続: source → pitch → [HP] → LS → PK → HS → comp → dest
     this.sourceNode.connect(this.pitchNode);
 
     if (p.hpFreq) {
