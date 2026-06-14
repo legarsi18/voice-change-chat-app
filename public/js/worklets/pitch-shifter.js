@@ -1,21 +1,22 @@
 // 位相ボコーダー (Phase Vocoder) によるリアルタイムピッチシフター
 //
-// 【改良点】旧グラニュラー合成からの変更
-//   グラニュラー: readPos が負になる / 音が揺れる / ヘリウム感
-//   位相ボコーダー: 各周波数ビンの瞬時位相を追跡 → 正確なピッチシフト
+// 【修正済みバグ】
+// バグ①: hsAccum なしで Hs=round(Ha*P) を使うと長時間でドリフトが蓄積し
+//         fracRead が outWritePos に追いつく → 声のコピー・ゴーストノイズ
+//   修正: hsAccum で小数部を持ち越し、合計書き込みサンプル数が fracRead と一致するよう調整
 //
-// アルゴリズム: 時間伸縮 + 再サンプリング
-//   1. FFT で周波数ドメインに変換
-//   2. 各ビンの真の瞬時周波数を位相差から計算
-//   3. 合成ホップ Hs = Ha * pitchRatio で OLA 出力（時間伸縮）
-//   4. 出力を pitchRatio 倍速で読み出し（再サンプリングで時間を元に戻す）
-//   結果: 時間は変わらず、ピッチだけが pitchRatio 倍になる
+// バグ②: pitchRatio < 1 のとき同じ整数位置を 2 回読んでしまう
+//         1 回目: outBuf[ri0] をゼロクリア → 2 回目: 0 を読む → 定期的ゼロサンプル → ビー音
+//   修正: lastReadInt を追跡し、整数位置が進んだときだけクリアする
+//
+// バグ③: synthPhaseAccum が無限に増大し float32 精度が劣化
+//         長時間使用で位相誤差が蓄積 → ビー音・ハム音
+//   修正: 毎フレーム [0, 2π) に正規化
 
 const TWO_PI = 2 * Math.PI;
 
-// Cooley-Tukey FFT（インプレース、基数2、時間間引き）
+// Cooley-Tukey FFT（インプレース、基数2）
 function fft(re, im, n) {
-  // ビット反転置換
   for (let i = 1, j = 0; i < n; i++) {
     let bit = n >> 1;
     for (; j & bit; bit >>= 1) j ^= bit;
@@ -25,7 +26,6 @@ function fft(re, im, n) {
       t = im[i]; im[i] = im[j]; im[j] = t;
     }
   }
-  // バタフライ演算
   for (let len = 2; len <= n; len <<= 1) {
     const half = len >> 1;
     const ang  = -TWO_PI / len;
@@ -55,23 +55,22 @@ function ifft(re, im, n) {
 class PitchShifterProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     return [
-      { name: 'pitchRatio', defaultValue: 1.0, minValue: 0.25, maxValue: 4.0 },
+      { name: 'pitchRatio', defaultValue: 1.0, minValue: 0.5, maxValue: 2.0 },
     ];
   }
 
   constructor() {
     super();
-    this.N  = 2048; // FFT サイズ（周波数解像度とレイテンシのバランス）
-    this.Ha = 256;  // 分析ホップ（8倍オーバーラップ）
+    this.N  = 1024; // FFT サイズ（レイテンシ ≈ 21ms@48kHz）
+    this.Ha = 128;  // 分析ホップ（8× オーバーラップ）
 
-    // Hann 窓関数
+    // Hann 窓
     this.win = new Float32Array(this.N);
     for (let i = 0; i < this.N; i++) {
       this.win[i] = 0.5 * (1 - Math.cos(TWO_PI * i / this.N));
     }
 
-    // OLA 正規化係数を事前計算（合成ホップ = Ha のケース）
-    // = 1 / sum_m(win[center - m*Ha]^2) で窓のオーバーラップゲインを補正
+    // OLA 正規化係数（合成ホップ Ha のとき）
     {
       let sum = 0;
       const ctr = this.N >> 1;
@@ -82,7 +81,7 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
       this.winNormBase = 1 / Math.max(sum, 1e-10);
     }
 
-    // 循環入力バッファ（2 * N で余裕を持たせる）
+    // 入力循環バッファ
     this.inBuf = new Float32Array(this.N * 2);
     this.inWritePos = 0;
     this.sampleCount = 0;
@@ -91,31 +90,37 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
     const bins = (this.N >> 1) + 1;
     this.lastInputPhase  = new Float32Array(bins);
     this.synthPhaseAccum = new Float32Array(bins);
-
-    // 各ビンの Ha あたりの期待位相進行量
-    this.expectedAdv = new Float32Array(bins);
+    this.expectedAdv     = new Float32Array(bins);
     for (let k = 0; k < bins; k++) {
       this.expectedAdv[k] = TWO_PI * k * this.Ha / this.N;
     }
 
-    // FFT 作業バッファ（process() 内でアロケートしない → GC プレッシャーなし）
+    // FFT 作業バッファ（process() 内でアロケートしない）
     this.fftRe = new Float32Array(this.N);
     this.fftIm = new Float32Array(this.N);
     this.outRe = new Float32Array(this.N);
     this.outIm = new Float32Array(this.N);
 
-    // OLA 出力リングバッファ（max pitchRatio=4 対応 + 余裕）
+    // OLA 出力リングバッファ
     this.outLen      = this.N * 32;
     this.outBuf      = new Float32Array(this.outLen);
-    this.outWritePos = this.N; // 初期プリディレイ（レイテンシ = N サンプル ≈ 43ms@48kHz）
-    this.fracRead    = 0;      // 小数点読み取り位置（再サンプリング用）
+    this.outWritePos = this.N; // プリディレイ = N サンプル ≈ 21ms
+    this.fracRead    = 0;
+
+    // ── バグ① 修正: hsAccum で Hs のドリフトを防ぐ ──
+    // Hs = round(Ha*P) を使うと長時間で fracRead と outWritePos がずれる
+    // hsAccum に小数部を持ち越すことで累計書き込みサンプル数を正確に保つ
+    this.hsAccum = 0;
+
+    // ── バグ② 修正: lastReadIntPos で安全なクリアを管理 ──
+    // pitchRatio < 1 のとき同じ整数位置を複数回読むが、
+    // 整数位置が変わったときだけクリアすることで二度読みを安全に処理
+    this.lastReadIntPos = 0;
   }
 
-  // 位相を [-π, π] に正規化
   _wrap(p) {
-    // 効率的なラッピング（whileループより高速）
     p = p % TWO_PI;
-    if (p > Math.PI)  p -= TWO_PI;
+    if (p >  Math.PI) p -= TWO_PI;
     if (p < -Math.PI) p += TWO_PI;
     return p;
   }
@@ -123,11 +128,17 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
   _processFrame(pitchRatio) {
     const N  = this.N;
     const Ha = this.Ha;
-    // 合成ホップ: pitchRatio 倍にすることで時間伸縮を実現
-    const Hs   = Math.max(1, Math.round(Ha * pitchRatio));
     const bins = (N >> 1) + 1;
 
-    // 最新 N サンプルを Hann 窓で切り出し FFT バッファへコピー
+    // ── バグ① 修正: hsAccum で小数部を持ち越す ──
+    // 例: pitchRatio=1.189, Ha=128 → Ha*P=152.192
+    //   round なら Hs=152 → 0.192 ずつ誤差蓄積
+    //   hsAccum なら余り 0.192 を次フレームへ → 累計誤差ゼロ
+    this.hsAccum += Ha * pitchRatio;
+    const Hs = Math.max(1, Math.floor(this.hsAccum));
+    this.hsAccum -= Hs; // 小数部を次フレームへ持ち越す
+
+    // Hann 窓をかけた入力フレームを FFT バッファへコピー
     for (let i = 0; i < N; i++) {
       const idx = (this.inWritePos - N + i + this.inBuf.length) % this.inBuf.length;
       this.fftRe[i] = this.inBuf[idx] * this.win[i];
@@ -136,25 +147,25 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
 
     fft(this.fftRe, this.fftIm, N);
 
-    // 位相ボコーダー処理: 瞬時周波数から合成位相を計算
+    // 位相ボコーダー: 瞬時周波数 → 合成位相
     for (let k = 0; k < bins; k++) {
       const mag   = Math.sqrt(this.fftRe[k] ** 2 + this.fftIm[k] ** 2);
       const phase = Math.atan2(this.fftIm[k], this.fftRe[k]);
-
-      // 期待位相進行からのズレ（位相アンラッピング）
-      const diff     = this._wrap(phase - this.lastInputPhase[k] - this.expectedAdv[k]);
-      const trueAdv  = this.expectedAdv[k] + diff; // 真の瞬時周波数（位相/サンプル）
-
+      const diff  = this._wrap(phase - this.lastInputPhase[k] - this.expectedAdv[k]);
       this.lastInputPhase[k] = phase;
 
-      // 合成位相を Hs/Ha 倍スケールで蓄積（時間伸縮に対応）
-      this.synthPhaseAccum[k] += (Hs / Ha) * trueAdv;
+      // 合成位相を Hs/Ha 倍スケールで蓄積
+      this.synthPhaseAccum[k] += (Hs / Ha) * (this.expectedAdv[k] + diff);
+
+      // ── バグ③ 修正: synthPhaseAccum を [0, 2π) に正規化 ──
+      // 無限増大すると float32 の精度が失われビー音・ハム音が発生する
+      this.synthPhaseAccum[k] = ((this.synthPhaseAccum[k] % TWO_PI) + TWO_PI) % TWO_PI;
 
       this.outRe[k] = mag * Math.cos(this.synthPhaseAccum[k]);
       this.outIm[k] = mag * Math.sin(this.synthPhaseAccum[k]);
     }
 
-    // 負の周波数ビンをミラーリング（実数信号の復元）
+    // 負周波数ミラーリング
     for (let k = 1; k < N >> 1; k++) {
       this.outRe[N - k] =  this.outRe[k];
       this.outIm[N - k] = -this.outIm[k];
@@ -164,8 +175,7 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
 
     ifft(this.outRe, this.outIm, N);
 
-    // 合成ホップ Hs で OLA（オーバーラップ加算）
-    // 合成ホップが変わるとオーバーラップ数が変わるため正規化を Ha/Hs でスケール
+    // OLA（オーバーラップ加算）
     const norm = this.winNormBase * (Ha / Hs);
     for (let i = 0; i < N; i++) {
       const pos = (this.outWritePos + i) % this.outLen;
@@ -182,27 +192,33 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
     const pitchRatio = parameters.pitchRatio[0] ?? 1.0;
 
     for (let i = 0; i < input.length; i++) {
-      // 入力サンプルを循環バッファに書き込む
+      // 入力書き込み
       this.inBuf[this.inWritePos] = input[i];
       this.inWritePos = (this.inWritePos + 1) % this.inBuf.length;
 
-      // Ha サンプルごとに分析フレームを処理
+      // Ha サンプルごとにフレーム処理
       if (++this.sampleCount >= this.Ha) {
         this.sampleCount = 0;
         this._processFrame(pitchRatio);
       }
 
-      // 出力バッファから線形補間で読み出し（pitchRatio 倍速で再サンプリング）
-      // → 時間伸縮（Hs = Ha*P）を打ち消して元の速度に戻す
-      const ri0 = Math.floor(this.fracRead) % this.outLen;
+      // 出力読み出し（線形補間）
+      const readInt = Math.floor(this.fracRead);
+      const ri0 = readInt % this.outLen;
       const ri1 = (ri0 + 1) % this.outLen;
-      const fr  = this.fracRead - Math.floor(this.fracRead);
+      const fr  = this.fracRead - readInt;
       output[i] = this.outBuf[ri0] * (1 - fr) + this.outBuf[ri1] * fr;
 
-      // 読んだサンプルをクリア
-      this.outBuf[ri0] = 0;
+      // ── バグ② 修正: 整数位置が進んだときだけクリア ──
+      // pitchRatio < 1: 同じ ri0 を複数回読む → 1 回目のクリアで 0 になるのを防ぐ
+      // pitchRatio > 1: 飛び越えた位置もクリアする
+      const newIntPos = readInt % this.outLen;
+      while (this.lastReadIntPos !== newIntPos) {
+        this.outBuf[this.lastReadIntPos] = 0;
+        this.lastReadIntPos = (this.lastReadIntPos + 1) % this.outLen;
+      }
 
-      // 小数点読み取り位置を pitchRatio 進める
+      // 読み取り位置を進める（pitchRatio 倍速で再サンプリング）
       this.fracRead += pitchRatio;
       if (this.fracRead >= this.outLen) this.fracRead -= this.outLen;
     }
