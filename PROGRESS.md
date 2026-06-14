@@ -25,7 +25,7 @@
 ## デプロイ手順
 ```bash
 # フロントエンドを更新した場合
-npx wrangler pages deploy public --project-name voice-change-chat-app --branch master
+npx wrangler pages deploy public --project-name voice-change-chat-app --branch master --commit-dirty=true
 
 # Workerを更新した場合
 cd worker && npx wrangler deploy && cd ..
@@ -34,12 +34,138 @@ cd worker && npx wrangler deploy && cd ..
 git add -A && git commit -m "変更内容" && git push origin master
 ```
 
+---
+
+## ボイスチェンジャー設計（現状 v19）
+
+### 採用技術
+- **位相ロック Phase Vocoder (Phase Locking PV)**
+  - N=4096（v19で2048から倍増）, Ha=256, **16xオーバーラップ**
+  - 周波数分解能: 11.7Hz/bin（v16比で4倍精細）
+  - 5パスアルゴリズム（ピーク検出→帰属→位相ロック）
+- **フォルマントシフト**: pitchとformantを独立制御（重要）
+- **EQ**: HP + LowShelf + Peaking×2 + HighShelf + DynamicsCompressor
+- **none（素の声）**: FFT完全スキップ、レイテンシーゼロ・ノイズゼロ
+
+### 修正済みバグ（PV）
+- Bug①: hsAccum で Hs ドリフト防止（声のコピー）
+- Bug②: lastReadIntPos で安全クリア（ビー音）
+- Bug③: synthPhaseAccum を毎フレーム [0,2π) 正規化（ハム音）
+
+### 安全パラメータ範囲（実験で判明した限界値）
+```
+pitchRatio  : 0.84 〜 1.19（最大 ±3 半音。これ以上は詐欺音声化）
+formantRatio: 0.90 〜 1.18（0.90未満は篭り激増。1.20超は詐欺音声化）
+breathMix   : 0    （PVノイズに加算されて悪化するため全廃。v17→v18で削除）
+```
+
+### gitリバートポイント
+```bash
+# v16安定版（3バグ修正済みPV、プリセット4種）
+git checkout v16-stable -- public/js/voice-changer.js public/sw.js
+
+# v17（VOICEVOXキャラクター10プリセット、パラメータ過激版 ※使用不可レベル）
+git checkout v17-voicevox -- public/js/voice-changer.js public/sw.js
+
+# 特定コミットに戻す場合
+git log --oneline  # ハッシュ確認
+git checkout <hash> -- public/js/voice-changer.js
+```
+
+---
+
+## プリセット一覧（v18〜v19 現行）
+
+| キー | ラベル | pitchRatio | formantRatio | 設計の核心 |
+|---|---|---|---|---|
+| none | 素の声 | 1.0 | 1.0 | エフェクトなし（FFTスキップ） |
+| rito | 離途 ♂ | 0.944 | 0.95 | 温もり系、180Hz+1.5dB |
+| saehaku | 黒沢冴白 ♂ | 0.891 | 0.92 | 強気・張り系、130Hz+3.5dB、2.5kHz+3.5dB |
+| kotaro | 白上虎太郎 ♂ | 1.059 | 1.08 | 少年系、1.2kHz高QピークでBoy感 |
+| takehiro | 玄野武宏 ♂ | 1.026 | 1.00 | 爽やか系、3kHz+2.5dB、9kHz+4dB |
+| ryusei | 青山龍星 ♂ | 0.841 | 0.90 | バリトン系、100Hz+5dB（formant 0.90が安全下限） |
+| bii | 猫使ビィ ♀ | 1.189 | 1.18 | 幼い系、3kHz+3.5dB、10kHz+5dB |
+| tsurugi | 中部つるぎ ♀ | 1.059 | 1.10 | 凛系、900Hz-3dBで甘さ除去 |
+| zunko | 東北ずん子 ♀ | 1.122 | 1.12 | 親しみ系、1.5kHz+1.5dB |
+| mitama | 暁記ミタマ ♀ | 1.122 | 1.12 | 儚い系、120HzHP+5kHz+2.5dB |
+| tsumugi | 春日部つむぎ ♀ | 1.189 | 1.18 | 元気系、2.5kHz+3.5dB、10kHz+5dB |
+
+---
+
+## 既知の未解決問題
+
+### ① 篭り・機械的な音（最重要 → 次回セッションで対応）
+- **状況**: 常時ザー音はv18で解決。篭りと機械的な音は残存。
+- **根本**: PV固有のアーティファクト。位相ロックで削減済みだが完全解消は困難。
+- **方針**: UIパラメータ調整機能を実装し、ユーザー自身が音を作れるようにする。
+
+### ② 旧来バグ（対応保留中）
+- Bug A: ルーム作成画面クリックで音楽が止まる（silence.mp3 keepalive）
+- Bug B: テスト再生でマイク許可が毎回出る（stream.stop()後にキャッシュがない）
+- Bug C: 参加ボタンで「招待リンクが無効か期限切れ」エラー（GET→POST化が必要）
+
+---
+
+## ★ 次回セッションタスク：パラメータ調整UI実装
+
+### 目的
+篭りや機械的な音を、ユーザー自身がパラメータ操作で改善できるようにする。
+
+### 実装場所
+**URL作成ページ（管理者ログイン後の画面）の下**に「ボイス調整パネル」セクションを追加。
+
+### 機能仕様
+
+#### 1. ボイス一覧 + スライダー
+- 10キャラクター + 素の声がリストで並ぶ
+- 各ボイスを展開するとパラメータスライダーが表示される
+
+#### 2. 調整できるパラメータとスライダー説明文
+| パラメータ | 表示名 | 説明文（UI表示用） | 推奨範囲 |
+|---|---|---|---|
+| pitchRatio | 声の高低 | 低くしたい→下げる / 高くしたい→上げる / 機械感が増したら戻す | 0.84〜1.19 |
+| formantRatio | 声の太細 | 篭りがひどい→1.0に近づける / キャラ感を出したい→離す（※要注意） | 0.90〜1.18 |
+| lsGain | 低音の強さ | 重くしたい→上げる / 軽くしたい・篭る→下げる | -4〜+5 dB |
+| pkFreq | 中域EQの周波数 | 篭る帯域を特定してその周波数を設定（人の声の主要域: 300〜3000Hz） | 200〜4000 Hz |
+| pkGain | 中域EQの強さ | 篭りをカット→下げる / 前に出したい→上げる | -6〜+6 dB |
+| pk2Freq | 中高域EQの周波数 | プレゼンス・明るさの調整（主要域: 2000〜6000Hz） | 1000〜8000 Hz |
+| pk2Gain | 中高域EQの強さ | 明るくしたい・キャラ感→上げる / 耳障り・ノイズっぽい→下げる | -6〜+6 dB |
+| hsGain | 高音・空気感 | シャリシャリ感・空気感→上げる / ノイズっぽい・機械的→下げる | -3〜+6 dB |
+
+#### 3. ボタン
+- **「▶ テスト再生」ボタン**: マイク音声をリアルタイムプレビュー（スライダーを動かしながら確認）
+- **「💾 保存」ボタン**: localStorageにカスタム値を保存（次回起動時も維持）
+- **「↩ デフォルトに戻す」ボタン**: voice-changer.jsのデフォルト値にリセット
+
+### データ保持の仕様
+```javascript
+// localStorageに保存するキー（既存のprofileとは別）
+'voiceCustomParams' = {
+  rito: { pitchRatio: 0.944, formantRatio: 0.95, lsGain: 1.5, ... },
+  saehaku: { ... },
+  ...
+}
+
+// 読み込み優先順位
+// カスタム保存値 → VOICE_PRESETS デフォルト値
+```
+
+### 関連ファイル（修正が必要なもの）
+| ファイル | 変更内容 |
+|---|---|
+| `public/js/app.js` | パラメータUI描画・localSave/Load・テスト再生ロジック |
+| `public/css/style.css` | スライダーのスタイル追加 |
+| `public/index.html` | パネルのHTML挿入（管理者画面の下） |
+| `public/js/voice-changer.js` | setPreset()でカスタム値を優先的に使う処理を追加 |
+
+---
+
 ## アプリ機能（実装済み）
 - [x] ホーム画面（管理者パスワード付きルーム作成）
 - [x] 招待URL発行（7日間有効なトークン）
 - [x] ロビー画面（参加前にアイコン・名前・ボイス設定）
 - [x] 設定のlocalStorage引き継ぎ（次回自動入力）
-- [x] ボイスチェンジャー5種（素の声・重戦士・少年・ヒロイン・ボーイッシュ）
+- [x] ボイスチェンジャー11種（素の声+VOICEVOXキャラクター10種）
 - [x] テスト再生ボタン（※イヤホン推奨）
 - [x] 通話画面（参加者アイコン表示・話し中インジケーター）
 - [x] 共有メモ機能
@@ -52,62 +178,8 @@ git add -A && git commit -m "変更内容" && git push origin master
 - [x] アイコン自前アップロード対応
 - [x] 再入室バグ修正（DO storage + invite token persistence）
 - [x] WebSocket keepalive ping (25秒間隔)
-
-## ボイスチェンジャー設計（現状）
-
-### 採用技術
-- **位相ボコーダー（Phase Vocoder）**: N=1024, Ha=128, 8x overlap
-- **フォルマントシフト**: 単一比率でスペクトル包絡全体をリマップ（pitchとformantが独立）
-- **EQ**: HP + LowShelf + Peaking + HighShelf + DynamicsCompressor
-- **息感ノイズ**: ホワイトノイズ → HPF(2500Hz) → Gain（F-1専用）
-
-### 修正済みバグ（Phase Vocoder）
-- Bug①: hsAccum で Hs ドリフト防止（声のコピー）
-- Bug②: lastReadIntPos で安全クリア（ビー音）
-- Bug③: synthPhaseAccum を毎フレーム [0,2π) 正規化（ハム音）
-
-### プリセット設計 - ゲームキャラクターアーキタイプ
-ユーザー提供の専門設計仕様（M-1/M-2/F-1/F-2）に基づいて再設計済み（sw.js v13）
-
-| キー | ラベル | pitchRatio | formantRatio | EQ設計 | 息感 |
-|---|---|---|---|---|---|
-| none | 素の声 | 1.0 | 1.0 | なし | なし |
-| male1 | 男性 重戦士 | 0.794 (-4st) | 0.82 | 150Hz+3dB, 2kHz+2dB, 5kHz-3dB | なし |
-| male2 | 男性 少年・軽快 | 1.059 (+1st) | 1.10 | HP120Hz, 200Hz-2dB, 4kHz+3dB, 7kHz+1dB | なし |
-| female1 | 女性 ヒロイン | 1.189 (+3st) | 1.25 | HP200Hz, 200Hz-2dB, 2.5kHz+3dB, 8kHz+2dB | 0.03 |
-| female2 | 女性 ボーイッシュ | 0.944 (-1st) | 0.90 | HP120Hz, 300Hz+2dB, 5kHz-2dB | なし |
-
-### 設計の考え方
-- **male1**: formant 0.82（0.78より緩和）でこもり軽減、2kHzプレゼンスで聴き取り改善
-- **male2**: formant 1.10でF2上昇→前に出る明るさ、pitchもやや上→少年感
-- **female1**: formant 1.25でF2大幅上昇→透明感・清潔感、breathMix=0.03で息漏れ質感
-- **female2**: formant 0.90でF1抑制→胸声感・中性感、300Hzで芯を出す
-
-### さらなる品質向上の選択肢（未実装・優先度順）
-1. **位相ロック(Phase Locking)**: ミュージカルノイズ削減（最も効果大。難度高）
-2. **F1/F2独立シフト**: 周波数帯域ごとにformantRatioを変える
-3. **ハーモニックエキサイター**: WaveShaper → BPF のサイドチェーンで倍音付加
-4. **過渡検出(Transient Detection)**: 子音部分はPVをバイパス
-
-## 未解決バグ（次回セッションで対応）
-### Bug 1: ルーム作成画面クリックで音楽が止まる
-- **原因**: `silence.mp3` の keepalive再生が「ページ上の最初のクリック」で発火するため
-- **対象ファイル**: `public/index.html`
-
-### Bug 2: テスト再生でマイク許可が毎回出る
-- **原因**: テスト後に `stream.stop()` を呼んでいるため
-- **修正方針**: テスト用ストリームをキャッシュして使い回す
-- **対象ファイル**: `public/js/app.js` の `testVoice` イベントハンドラー
-
-### Bug 3: 参加ボタンで「招待リンクが無効か期限切れです」
-- **修正方針**: joinをGET→POSTに変更してトークンをbodyで渡す
-- **対象ファイル**: `public/js/app.js`, `worker/src/index.js`
-
-## 次回セッション開始時の手順
-1. このファイル（PROGRESS.md）を読む
-2. 声のクオリティ検証結果を確認 → 改善が必要なら「さらなる品質向上の選択肢」を実装
-3. 未解決バグ3つを順番に修正する
-4. 修正後は必ずデプロイ（wrangler pages deploy + push）
+- [x] 位相ロックPV（ムジカルノイズ削減）
+- [x] N=4096 高精度FFT（16xオーバーラップ、11.7Hz/bin解像度）
 
 ## ファイル構成
 ```
@@ -123,14 +195,14 @@ voice-change-chat-app/
 └── public/                  ← Cloudflare Pages（フロントエンド）
     ├── index.html           ← PWA対応HTML
     ├── manifest.json
-    ├── sw.js                ← Service Worker (現在 v13)
+    ├── sw.js                ← Service Worker (現在 v19)
     ├── silence.mp3          ← iOSバックグラウンド用無音ファイル
     ├── icons/               ← SVGアイコン8種
     ├── css/style.css        ← 全スタイル
     └── js/
-        ├── app.js           ← メインUI・ルーティング
+        ├── app.js           ← メインUI・ルーティング（VOICE_PRESETSからUI自動生成）
         ├── room.js          ← WebRTC + Cloudflare Realtime（pingキープアライブ含む）
-        ├── voice-changer.js ← ボイスチェンジャー本体（位相ボコーダー+フォルマント+息感）
+        ├── voice-changer.js ← ボイスチェンジャー本体（PV+フォルマント+EQ）
         └── worklets/
-            └── pitch-shifter.js ← AudioWorkletピッチシフター（バグ3つ修正済み）
+            └── pitch-shifter.js ← AudioWorkletピッチシフター（N=4096 位相ロックPV）
 ```
