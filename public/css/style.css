@@ -8,8 +8,10 @@
   --bg2: #16161f;
   --bg3: #1e1e2a;
   --border: #2a2a3a;
-  --accent: #00c840;
-  --accent2: #00ff00;
+  --accent: #2bcc0a;
+  --accent2: #39FF14;
+  --glow-text: 0 0 6px #39FF14, 0 0 16px #39FF14;
+  --glow-box: 0 0 8px rgba(57,255,20,0.5), 0 0 20px rgba(57,255,20,0.2);
   --text: #e8e8f0;
   --text2: #9090a8;
   --danger: #c84040;
@@ -51,7 +53,7 @@ html, body {
 }
 .btn:active { transform: scale(0.97); }
 .btn:disabled { opacity: 0.5; pointer-events: none; }
-.btn-primary { background: var(--accent); color: #000; width: 100%; margin-top: 16px; }
+.btn-primary { background: var(--accent); color: #000; width: 100%; margin-top: 16px; box-shadow: var(--glow-box); }
 .btn-secondary { background: var(--bg3); color: var(--text); border: 1px solid var(--border); }
 .btn-small { padding: 8px 14px; font-size: 13px; }
 .btn-mute { background: var(--bg3); color: var(--text); border: 1px solid var(--border); padding: 10px 16px; }
@@ -94,7 +96,7 @@ html, body {
   gap: 12px;
 }
 
-.logo { font-size: 2.5rem; font-weight: 700; color: var(--accent2); letter-spacing: 0.05em; }
+.logo { font-size: 2.5rem; font-weight: 700; color: var(--accent2); letter-spacing: 0.05em; text-shadow: var(--glow-text); }
 .subtitle { color: var(--text2); font-size: 14px; }
 
 .invite-box {
@@ -207,11 +209,11 @@ html, body {
   top: 0;
   z-index: 10;
 }
-.room-title { font-size: 16px; font-weight: 700; color: var(--accent2); }
+.room-title { font-size: 16px; font-weight: 700; color: var(--accent2); text-shadow: var(--glow-text); }
 .participant-count { font-size: 13px; color: var(--text2); }
 .room-timer { font-size: 13px; color: var(--text2); font-variant-numeric: tabular-nums; }
 
-.test-status { font-size: 13px; color: var(--accent2); margin-top: 8px; min-height: 20px; }
+.test-status { font-size: 13px; color: var(--accent2); margin-top: 8px; min-height: 20px; text-shadow: var(--glow-text); }
 .test-note { font-size: 12px; color: var(--text2); margin-top: 4px; }
 
 .participants-grid {
@@ -336,6 +338,7 @@ html, body {
   background: var(--bg3);
   list-style: none;
   user-select: none;
+  text-shadow: var(--glow-text);
 }
 .vap-panel-toggle::-webkit-details-marker { display: none; }
 .vap-toggle-hint { font-size: 12px; color: var(--text2); font-weight: 400; margin-left: auto; }
@@ -355,6 +358,7 @@ html, body {
   color: var(--accent2);
   min-height: 18px;
   margin-bottom: 8px;
+  text-shadow: var(--glow-text);
 }
 
 /* 各ボイスアコーディオン */
@@ -422,6 +426,7 @@ html, body {
   font-variant-numeric: tabular-nums;
   min-width: 72px;
   text-align: right;
+  text-shadow: var(--glow-text);
 }
 .vap-slider {
   -webkit-appearance: none;
@@ -442,7 +447,7 @@ html, body {
   background: var(--accent2);
   cursor: pointer;
   border: 2px solid var(--bg);
-  box-shadow: 0 0 4px rgba(0,0,0,0.4);
+  box-shadow: var(--glow-box);
 }
 .vap-slider::-moz-range-thumb {
   width: 18px;
@@ -451,6 +456,7 @@ html, body {
   background: var(--accent2);
   cursor: pointer;
   border: 2px solid var(--bg);
+  box-shadow: var(--glow-box);
 }
 .vap-slider-desc {
   font-size: 11px;
@@ -475,15 +481,17 @@ html, body {
   color: var(--accent2);
 }
 
-/* 緑テスト再生ボタン */
+/* ネオングリーンテスト再生ボタン */
 .btn-gold {
-  background: rgba(0,255,0,0.08);
+  background: rgba(57,255,20,0.08);
   color: var(--accent2);
-  border: 1px solid rgba(0,255,0,0.4);
+  border: 1px solid rgba(57,255,20,0.5);
   border-radius: 10px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s, box-shadow 0.15s;
+  text-shadow: var(--glow-text);
+  box-shadow: var(--glow-box);
 }
-.btn-gold:hover { background: rgba(0,255,0,0.16); }
-.btn-gold:active { background: rgba(0,255,0,0.26); }
+.btn-gold:hover { background: rgba(57,255,20,0.16); box-shadow: 0 0 12px rgba(57,255,20,0.7), 0 0 28px rgba(57,255,20,0.3); }
+.btn-gold:active { background: rgba(57,255,20,0.26); }
