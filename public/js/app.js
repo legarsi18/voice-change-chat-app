@@ -317,7 +317,7 @@ function setupVoiceAdjustPanel() {
 function renderHome(app) {
   app.innerHTML = `
     <div class="screen home-screen">
-      <div class="logo">⚔️ 作戦会議</div>
+      <div class="logo">軍議の間</div>
       <p class="subtitle">招待URLを発行してメンバーを招集</p>
       <div class="section">
         <label class="section-label" for="pwInput">管理者パスワード</label>
@@ -353,7 +353,7 @@ function renderHome(app) {
 
       app.innerHTML = `
         <div class="screen home-screen">
-          <div class="logo">⚔️ 作戦会議</div>
+          <div class="logo">軍議の間</div>
           <div class="invite-box">
             <p class="invite-label">招待URLをメンバーに共有してください</p>
             <div class="invite-url" id="inviteUrl">${inviteUrl}</div>
@@ -435,17 +435,17 @@ function renderLobby(app, roomId, token) {
         <div class="voice-grid">${voiceOptions}</div>
 
         <!-- STEP1: AudioContext動作確認（マイク不要・ビープ音） -->
-        <button class="btn btn-secondary btn-small" id="beepTest" style="margin-bottom:6px;">🔊 STEP1: スピーカーテスト（ビープ音）</button>
+        <button class="btn btn-gold btn-small" id="beepTest" style="margin-bottom:6px;">🔊 STEP1: スピーカーテスト（ビープ音）</button>
         <!-- STEP2: マイク直接確認（AudioWorkletなし） -->
-        <button class="btn btn-secondary btn-small" id="micDirectTest" style="margin-bottom:6px;">🎙 STEP2: マイク直接確認（加工なし）</button>
+        <button class="btn btn-gold btn-small" id="micDirectTest" style="margin-bottom:6px;">🎙 STEP2: マイク直接確認（加工なし）</button>
         <!-- STEP3: ボイスチェンジプレビュー（AudioWorklet使用） -->
-        <button class="btn btn-secondary btn-small" id="testVoice">🎤 STEP3: プレビューON（ボイスチェンジ）</button>
+        <button class="btn btn-gold btn-small" id="testVoice">🎤 STEP3: プレビューON（ボイスチェンジ）</button>
         <div id="testStatus" class="test-status"></div>
         <!-- display:none だとiOSがplay()を拒否するため、不可視だが有効な状態にする -->
         <audio id="monitorAudio" playsinline style="position:absolute;width:0;height:0;opacity:0;pointer-events:none"></audio>
         <p class="test-note">※ イヤホン推奨。スピーカーだとハウリングします<br>※ まずSTEP1→2→3の順に試してください</p>
         <!-- アプリ内デバッグログ（iOSでコンソールが見えない問題の代替） -->
-        <div id="debugLog" style="display:none;background:#111;border:1px solid #444;border-radius:8px;padding:8px;margin-top:8px;font-size:11px;font-family:monospace;max-height:120px;overflow-y:auto;color:#0f0;white-space:pre-wrap;"></div>
+        <div id="debugLog" style="display:none"></div>
       </section>
 
       <button class="btn btn-primary" id="joinBtn">ルームに参加する</button>
@@ -498,14 +498,7 @@ function renderLobby(app, roomId, token) {
   checkAndShowMicStatus();
 
   // ─── デバッグログ表示ユーティリティ ───
-  function dbg(msg, color = '#0f0') {
-    const el = document.getElementById('debugLog');
-    if (!el) return;
-    el.style.display = 'block';
-    const time = new Date().toLocaleTimeString('ja-JP', { hour12: false });
-    el.textContent += `[${time}] ${msg}\n`;
-    el.scrollTop = el.scrollHeight;
-    el.style.color = color;
+  function dbg(msg) {
     console.log(`[DEBUG] ${msg}`);
   }
 
@@ -861,7 +854,7 @@ async function renderRoom(app, roomId) {
   app.innerHTML = `
     <div class="screen room-screen">
       <header class="room-header">
-        <span class="room-title">⚔️ 作戦会議</span>
+        <span class="room-title">軍議の間</span>
         <span class="participant-count" id="pCount">1人</span>
         <span class="room-timer" id="roomTimer">0:00:00</span>
       </header>

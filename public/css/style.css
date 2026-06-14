@@ -474,3 +474,16 @@ html, body {
   border-color: var(--accent2);
   color: var(--accent2);
 }
+
+/* 金色テスト再生ボタン */
+.btn-gold {
+  background: rgba(229,184,74,0.12);
+  color: var(--accent2);
+  border: 1px solid rgba(229,184,74,0.5);
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn-gold:hover { background: rgba(229,184,74,0.22); }
+.btn-gold:active { background: rgba(229,184,74,0.32); }
