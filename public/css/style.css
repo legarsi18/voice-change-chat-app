@@ -314,3 +314,163 @@ html, body {
 }
 .voice-selector { display: flex; align-items: center; gap: 6px; flex: 1; }
 .footer-label { font-size: 12px; color: var(--text2); white-space: nowrap; }
+
+/* ───────────────────────────────────────────
+   ボイス調整パネル (VAP)
+─────────────────────────────────────────── */
+.vap-panel {
+  margin-top: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.vap-panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--accent2);
+  background: var(--bg3);
+  list-style: none;
+  user-select: none;
+}
+.vap-panel-toggle::-webkit-details-marker { display: none; }
+.vap-toggle-hint { font-size: 12px; color: var(--text2); font-weight: 400; margin-left: auto; }
+.vap-panel[open] .vap-toggle-hint { display: none; }
+
+.vap-panel-body {
+  padding: 12px 16px 16px;
+  background: var(--bg2);
+}
+.vap-panel-desc {
+  font-size: 12px;
+  color: var(--text2);
+  margin-bottom: 12px;
+}
+.vap-status {
+  font-size: 13px;
+  color: var(--accent2);
+  min-height: 18px;
+  margin-bottom: 8px;
+}
+
+/* 各ボイスアコーディオン */
+.vap-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+.vap-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  background: var(--bg3);
+  list-style: none;
+  user-select: none;
+}
+.vap-summary::-webkit-details-marker { display: none; }
+.vap-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+.vap-desc-short {
+  font-size: 12px;
+  color: var(--text2);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vap-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  background: rgba(200,150,42,0.15);
+  border: 1px solid rgba(200,150,42,0.4);
+  border-radius: 6px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+/* スライダーエリア */
+.vap-body {
+  padding: 14px;
+  background: var(--bg2);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.vap-slider-row { display: flex; flex-direction: column; gap: 4px; }
+.vap-slider-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.vap-slider-label { font-size: 13px; font-weight: 600; color: var(--text); }
+.vap-slider-val {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent2);
+  font-variant-numeric: tabular-nums;
+  min-width: 72px;
+  text-align: right;
+}
+.vap-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  outline: none;
+  cursor: pointer;
+}
+.vap-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent2);
+  cursor: pointer;
+  border: 2px solid var(--bg);
+  box-shadow: 0 0 4px rgba(0,0,0,0.4);
+}
+.vap-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent2);
+  cursor: pointer;
+  border: 2px solid var(--bg);
+}
+.vap-slider-desc {
+  font-size: 11px;
+  color: var(--text2);
+  line-height: 1.4;
+}
+
+/* パネルボタン行 */
+.vap-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.vap-buttons .btn-small {
+  font-size: 12px;
+  padding: 7px 12px;
+}
+.vap-buttons [data-panel-test].active {
+  background: rgba(200,150,42,0.2);
+  border-color: var(--accent2);
+  color: var(--accent2);
+}

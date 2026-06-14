@@ -311,11 +311,43 @@ export class VoiceChanger {
   setPreset(presetKey) {
     const key = VOICE_PRESETS[presetKey] ? presetKey : 'none';
     this.currentPreset = key;
-    this._buildGraph(key);
+    // カスタムパラメータをlocalStorageから読み込んでマージ
+    let custom = {};
+    try {
+      const saved = JSON.parse(localStorage.getItem('voiceCustomParams'));
+      if (saved?.[key]) custom = saved[key];
+    } catch {}
+    this._buildGraphFromParams({ ...VOICE_PRESETS[key], ...custom });
+  }
+
+  // リアルタイムスライダー操作用（グラフ再構築なし・スムーズ）
+  updateFilterParam(key, value) {
+    const ctx = this.audioContext;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    switch (key) {
+      case 'pitchRatio':   this.pitchNode?.parameters.get('pitchRatio').setTargetAtTime(value, t, 0.01); break;
+      case 'formantRatio': this.pitchNode?.parameters.get('formantRatio').setTargetAtTime(value, t, 0.01); break;
+      case 'lsGain':       this.lsFilter?.gain.setTargetAtTime(value, t, 0.01); break;
+      case 'pkFreq':       this.pkFilter?.frequency.setTargetAtTime(value, t, 0.01); break;
+      case 'pkGain':       this.pkFilter?.gain.setTargetAtTime(value, t, 0.01); break;
+      case 'pk2Freq':      this.pk2Filter?.frequency.setTargetAtTime(value, t, 0.01); break;
+      case 'pk2Gain':      this.pk2Filter?.gain.setTargetAtTime(value, t, 0.01); break;
+      case 'hsGain':       this.hsFilter?.gain.setTargetAtTime(value, t, 0.01); break;
+    }
+  }
+
+  // パネルテスト開始時のフル初期化（hpFreqを含むグラフトポロジーも設定）
+  setParamsDirect(params) {
+    if (!this.audioContext) return;
+    this._buildGraphFromParams(params);
   }
 
   _buildGraph(presetKey) {
-    const p   = VOICE_PRESETS[presetKey] ?? VOICE_PRESETS.none;
+    this._buildGraphFromParams(VOICE_PRESETS[presetKey] ?? VOICE_PRESETS.none);
+  }
+
+  _buildGraphFromParams(p) {
     const ctx = this.audioContext;
     if (!ctx) return;
 
