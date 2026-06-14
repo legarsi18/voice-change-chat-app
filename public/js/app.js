@@ -328,8 +328,7 @@ function renderHome(app) {
     </div>
   `;
 
-  setupVoiceAdjustPanel();
-
+  // createBtn を先にバインド（setupVoiceAdjustPanel がエラーでも動くように）
   document.getElementById('createBtn').addEventListener('click', async () => {
     const password = document.getElementById('pwInput').value;
     if (!password) { alert('パスワードを入力してください'); return; }
@@ -379,6 +378,9 @@ function renderHome(app) {
       alert(err.message);
     }
   });
+
+  // パネルのイベントはcreateBtn登録後に設定（エラーが出ても作成ボタンは動く）
+  try { setupVoiceAdjustPanel(); } catch (e) { console.error('[VoicePanel]', e); }
 }
 
 // ───────────────────────────────────────────
