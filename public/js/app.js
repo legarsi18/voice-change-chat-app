@@ -4,6 +4,7 @@ import { RoomClient } from './room.js';
 const WORKER_URL = ''; // _worker.js が同一オリジンでプロキシするため相対パスで良い
 const STORAGE_KEY = 'voice_chat_profile';
 const SESSION_KEY = 'voice_chat_session';
+const INVITE_KEY  = 'voice_chat_invite';  // 招待トークン保存（再入室時のロビーへの自動リダイレクト用）
 const ROOM_MAX_MS = 3 * 60 * 60 * 1000; // 3時間
 
 let profile = loadProfile();
@@ -37,6 +38,20 @@ function loadSession(roomId) {
   } catch { return null; }
 }
 function clearSession() { localStorage.removeItem(SESSION_KEY); }
+
+// 招待トークンを保存（ロビー訪問時に呼ぶ）→ セッション切れ後の再入室に使う
+function saveInvite(roomId, token) {
+  localStorage.setItem(INVITE_KEY, JSON.stringify({ roomId, token, savedAt: Date.now() }));
+}
+// 保存済み招待トークンを取得（7日以内のみ有効）
+function loadInvite(roomId) {
+  try {
+    const d = JSON.parse(localStorage.getItem(INVITE_KEY));
+    if (!d || d.roomId !== roomId) return null;
+    if (Date.now() - d.savedAt > 7 * 24 * 60 * 60 * 1000) return null;
+    return d.token;
+  } catch { return null; }
+}
 
 // ───────────────────────────────────────────
 // ルーティング
@@ -137,6 +152,10 @@ function renderHome(app) {
 // ロビー画面
 // ───────────────────────────────────────────
 function renderLobby(app, roomId, token) {
+  // 招待トークンを保存しておく → セッション切れで直接ルームURLにアクセスした時に
+  // ロビーへ自動リダイレクトできるようにする
+  if (token) saveInvite(roomId, token);
+
   const iconOptions = ['male-1','male-2','male-3','male-4','female-1','female-2','female-3','female-4'];
 
   const voiceOptions = Object.entries(VOICE_PRESETS).map(([key, p]) => `
@@ -181,10 +200,19 @@ function renderLobby(app, roomId, token) {
       <section class="section">
         <label class="section-label">ボイス</label>
         <div class="voice-grid">${voiceOptions}</div>
-        <button class="btn btn-secondary btn-small" id="testVoice">🎤 プレビューON（声を確認する）</button>
+
+        <!-- STEP1: AudioContext動作確認（マイク不要・ビープ音） -->
+        <button class="btn btn-secondary btn-small" id="beepTest" style="margin-bottom:6px;">🔊 STEP1: スピーカーテスト（ビープ音）</button>
+        <!-- STEP2: マイク直接確認（AudioWorkletなし） -->
+        <button class="btn btn-secondary btn-small" id="micDirectTest" style="margin-bottom:6px;">🎙 STEP2: マイク直接確認（加工なし）</button>
+        <!-- STEP3: ボイスチェンジプレビュー（AudioWorklet使用） -->
+        <button class="btn btn-secondary btn-small" id="testVoice">🎤 STEP3: プレビューON（ボイスチェンジ）</button>
         <div id="testStatus" class="test-status"></div>
-        <audio id="monitorAudio" playsinline style="display:none"></audio>
-        <p class="test-note">※ イヤホン推奨。スピーカーだとハウリングします</p>
+        <!-- display:none だとiOSがplay()を拒否するため、不可視だが有効な状態にする -->
+        <audio id="monitorAudio" playsinline style="position:absolute;width:0;height:0;opacity:0;pointer-events:none"></audio>
+        <p class="test-note">※ イヤホン推奨。スピーカーだとハウリングします<br>※ まずSTEP1→2→3の順に試してください</p>
+        <!-- アプリ内デバッグログ（iOSでコンソールが見えない問題の代替） -->
+        <div id="debugLog" style="display:none;background:#111;border:1px solid #444;border-radius:8px;padding:8px;margin-top:8px;font-size:11px;font-family:monospace;max-height:120px;overflow-y:auto;color:#0f0;white-space:pre-wrap;"></div>
       </section>
 
       <button class="btn btn-primary" id="joinBtn">ルームに参加する</button>
@@ -236,9 +264,112 @@ function renderLobby(app, roomId, token) {
   // マイク権限状態チェック（画面表示直後）
   checkAndShowMicStatus();
 
+  // ─── デバッグログ表示ユーティリティ ───
+  function dbg(msg, color = '#0f0') {
+    const el = document.getElementById('debugLog');
+    if (!el) return;
+    el.style.display = 'block';
+    const time = new Date().toLocaleTimeString('ja-JP', { hour12: false });
+    el.textContent += `[${time}] ${msg}\n`;
+    el.scrollTop = el.scrollHeight;
+    el.style.color = color;
+    console.log(`[DEBUG] ${msg}`);
+  }
+
+  // ─── STEP 1: ビープ音テスト（AudioContext → スピーカー直結、マイク不要）───
+  // これが聞こえない → iOS audio session が有効化されていない
+  // これが聞こえる  → AudioContext は正常、問題はマイクかAudioWorklet側
+  document.getElementById('beepTest').addEventListener('click', async () => {
+    const status = document.getElementById('testStatus');
+    // SYNC: iOS audio unlock
+    const ka = document.getElementById('keepalive');
+    if (ka?.paused) ka.play().catch(() => {});
+
+    status.textContent = '🔊 ビープ音を再生中…（3秒）';
+    dbg('STEP1 beep start');
+    try {
+      const ctx = new AudioContext();
+      dbg(`ctx.state before resume: ${ctx.state}`);
+      await ctx.resume();
+      dbg(`ctx.state after resume: ${ctx.state}`);
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = 440;
+      gain.gain.value = 0.3;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 1.5);
+      osc.onended = async () => {
+        await ctx.close();
+        status.textContent = '✅ STEP1完了。ビープ音は聞こえましたか？ → 聞こえた場合はSTEP2へ';
+        dbg('STEP1 done');
+      };
+    } catch (err) {
+      status.textContent = `❌ STEP1失敗: ${err.message}`;
+      dbg(`STEP1 error: ${err.name} ${err.message}`, '#f00');
+    }
+  });
+
+  // ─── STEP 2: マイク直接テスト（AudioWorkletなし、加工なし）───
+  // これが聞こえない → マイクの接続かAudioContext.destinationの問題
+  // これが聞こえる  → マイクは正常、問題はAudioWorklet（pitch-shifter）側
+  let step2Ctx = null;
+  document.getElementById('micDirectTest').addEventListener('click', async () => {
+    const status = document.getElementById('testStatus');
+    const btn = document.getElementById('micDirectTest');
+
+    // すでに実行中なら停止
+    if (step2Ctx) {
+      await step2Ctx.close().catch(() => {});
+      step2Ctx = null;
+      btn.textContent = '🎙 STEP2: マイク直接確認（加工なし）';
+      status.textContent = '⏹ STEP2停止';
+      return;
+    }
+
+    // SYNC: iOS audio unlock
+    const ka = document.getElementById('keepalive');
+    if (ka?.paused) ka.play().catch(() => {});
+
+    btn.disabled = true;
+    status.textContent = 'マイク起動中…';
+    dbg('STEP2 mic direct test start');
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      dbg(`mic acquired: ${stream.getAudioTracks().length} track(s)`);
+
+      const ctx = new AudioContext();
+      dbg(`ctx sampleRate: ${ctx.sampleRate}, state: ${ctx.state}`);
+      await ctx.resume();
+      dbg(`ctx resumed: ${ctx.state}`);
+
+      const src = ctx.createMediaStreamSource(stream);
+      src.connect(ctx.destination);
+      step2Ctx = ctx;
+
+      // testMicStream も設定しておく（後でJOINに使える）
+      testMicStream = stream;
+      showMicStatusBar('ok');
+
+      btn.textContent = '⏹ STEP2停止';
+      status.textContent = '🔴 STEP2実行中… イヤホンに自分の声が聞こえたらSTEP3へ。聞こえない場合はSTEP1を再確認。';
+      dbg('STEP2 running - mic → speaker direct');
+    } catch (err) {
+      status.textContent = `❌ STEP2失敗: ${err.message}`;
+      dbg(`STEP2 error: ${err.name} ${err.message}`, '#f00');
+      showMicError(err, status);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   // ライブプレビュートグル（ON/OFFで声をリアルタイム確認）
   let testVc = null;
   let isMonitoring = false;
+  let previewDirectCtx = null; // VoiceChangerが使えない場合の直接AudioContext
   const monitorAudio = document.getElementById('monitorAudio');
 
   async function stopPreview() {
@@ -250,6 +381,10 @@ function renderLobby(app, roomId, token) {
       await testVc.audioContext?.close().catch(() => {});
       testVc = null;
     }
+    if (previewDirectCtx) {
+      await previewDirectCtx.close().catch(() => {});
+      previewDirectCtx = null;
+    }
     const btn = document.getElementById('testVoice');
     const status = document.getElementById('testStatus');
     if (btn) btn.textContent = '🎤 プレビューON（声を確認する）';
@@ -260,39 +395,84 @@ function renderLobby(app, roomId, token) {
     const btn = document.getElementById('testVoice');
     const status = document.getElementById('testStatus');
 
-    // ONの場合はOFFにして終了
     if (isMonitoring) {
       await stopPreview();
       return;
     }
 
+    // ── iOSオーディオセッションのアンロック（awaitより前に同期実行 ← ここが最重要）──
+    // iOS は「ユーザー操作の同期イベント内」で AudioContext を作成し resume() しないと
+    // 後から resume() しても音が出ない。また audio.play() も同様。
+    const kaEl = document.getElementById('keepalive');
+    if (kaEl?.paused) kaEl.play().catch(() => {});
+    // AudioContext をここで同期作成して resume() する（awaitなし）
+    let iosUnlockCtx = null;
+    try {
+      iosUnlockCtx = new AudioContext();
+      iosUnlockCtx.resume(); // awaitしない。同期で呼ぶことがiOSアンロックの条件
+    } catch {}
+    // monitorAudio も同期で load() してiOSに「このエレメントは再生する予定」と通知
+    monitorAudio.load();
+
     btn.disabled = true;
     status.textContent = 'マイクを起動中…';
 
     try {
+      // マイクストリームを取得（既取得なら流用）
       if (!testMicStream || testMicStream.getTracks().every(t => t.readyState === 'ended')) {
         testMicStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       }
       showMicStatusBar('ok');
+      dbg(`STEP3: mic ok, tracks=${testMicStream.getAudioTracks().length}`);
+      status.textContent = '音声エンジン（AudioWorklet）を起動中…';
 
-      status.textContent = '音声エンジンを起動中…';
-      testVc = new VoiceChanger();
-      const outStream = await testVc.init(testMicStream);
-      testVc.setPreset(profile.voice);
-      await testVc.resume();
+      // ── VoiceChanger 起動を試みる ──
+      let vcSuccess = false;
+      let outStream = null;
+      try {
+        dbg(`STEP3: iosUnlockCtx state=${iosUnlockCtx?.state}`);
+        testVc = new VoiceChanger(iosUnlockCtx);
+        iosUnlockCtx = null;
+        dbg('STEP3: VoiceChanger created, calling init...');
+        outStream = await testVc.init(testMicStream);
+        dbg(`STEP3: init done, ctx.state=${testVc.audioContext?.state}, sampleRate=${testVc.audioContext?.sampleRate}`);
+        testVc.setPreset(profile.voice);
+        await testVc.resume();
+        dbg(`STEP3: resume done, ctx.state=${testVc.audioContext?.state}`);
+        vcSuccess = true;
+      } catch (vcErr) {
+        dbg(`STEP3: VoiceChanger FAILED: ${vcErr.name} ${vcErr.message}`, '#f80');
+        await testVc?.audioContext?.close().catch(() => {});
+        testVc = null;
+        outStream = null;
+        await iosUnlockCtx?.close().catch(() => {});
+        iosUnlockCtx = null;
+      }
 
-      // audio要素でiOS互換再生（audioContext.destinationより確実）
-      monitorAudio.srcObject = outStream;
-      await monitorAudio.play().catch(() => {
-        // audio要素で失敗した場合のフォールバック
+      if (vcSuccess && outStream) {
+        // iOS は audio.srcObject=MediaStreamDestination.stream でplay()がOKを返しても音が出ない
+        // → setMonitor(true) で AudioContext.destination に直接つなぐ方式を使う
+        // STEP2で confirmed: AudioContext.destination は iOS でも動作する
         testVc.setMonitor(true);
-      });
-
-      isMonitoring = true;
-      btn.textContent = '⏹ プレビューOFF（停止）';
-      status.textContent = '🔴 プレビュー中… イヤホンでボイスを確認できます。選んだらルームに参加してください。';
+        dbg(`STEP3: setMonitor(true) done, speakerGain=${testVc.speakerGain?.gain?.value}`);
+        dbg('STEP3: audio chain: mic→Worklet→compressor→speakerGain→ctx.destination');
+        isMonitoring = true;
+        btn.textContent = '⏹ STEP3 停止';
+        status.textContent = '🔴 プレビュー中（ボイスチェンジ）… イヤホンで声を確認してください。';
+      } else {
+        // VoiceChanger完全失敗 → 素マイク直接出力（STEP2と同じ）
+        dbg('STEP3: VoiceChanger fallback → direct mic', '#f80');
+        const ctx = new AudioContext();
+        await ctx.resume();
+        const src = ctx.createMediaStreamSource(testMicStream);
+        src.connect(ctx.destination);
+        previewDirectCtx = ctx;
+        isMonitoring = true;
+        btn.textContent = '⏹ STEP3 停止';
+        status.textContent = '🔴 マイク確認中（AudioWorklet失敗のためボイスチェンジなし）… 上のデバッグログを確認してください。';
+      }
     } catch (err) {
-      console.error('[testVoice] error:', err);
+      dbg(`STEP3 outer error: ${err.name} ${err.message}`, '#f00');
       testMicStream?.getTracks().forEach(t => t.stop());
       testMicStream = null;
       showMicError(err, status);
@@ -304,7 +484,12 @@ function renderLobby(app, roomId, token) {
   // ボイス切替時にプレビュー中ならリアルタイムでプリセット更新
 
   // 参加ボタン
-  document.getElementById('joinBtn').addEventListener('click', async () => {
+  document.getElementById('joinBtn').addEventListener('click', async (e) => {
+    // iOS audio session を参加ボタンクリック時点でアンロック（awaitより前に同期実行）
+    // プレビューを使わなかった場合でもルームでの音声を有効化するために必要
+    const kaElJoin = document.getElementById('keepalive');
+    if (kaElJoin?.paused) kaElJoin.play().catch(() => {});
+    try { const ac = new AudioContext(); ac.resume(); setTimeout(() => ac.close(), 500); } catch {}
     const name = document.getElementById('nameInput').value.trim();
     if (!name) { alert('表示名を入力してください'); return; }
 
@@ -351,6 +536,8 @@ function renderLobby(app, roomId, token) {
         testVc?.setMonitor(false);
         await testVc?.audioContext?.close().catch(() => {});
         testVc = null;
+        await previewDirectCtx?.close().catch(() => {});
+        previewDirectCtx = null;
         isMonitoring = false;
       }
       sharedMicStream = testMicStream;
@@ -426,6 +613,12 @@ function showMicError(err, statusEl) {
 async function renderRoom(app, roomId) {
   const sessionData = loadSession(roomId);
   if (!sessionData) {
+    // セッションがない場合：保存済み招待トークンがあればロビーへリダイレクト（再入室フロー）
+    const savedToken = loadInvite(roomId);
+    if (savedToken) {
+      location.hash = `#/room/${roomId}/lobby?t=${savedToken}`;
+      return;
+    }
     alert('招待URLからアクセスしてください');
     clearSession();
     location.hash = '#/';
@@ -513,6 +706,8 @@ async function renderRoom(app, roomId) {
     }
   }
 
+  // VoiceChanger: ルーム参加時はjoinBtnで既にiOS audio sessionがアンロック済み
+  // （joinBtn click → keepalive.play() + new AudioContext().resume() を同期で実行済み）
   voiceChanger = new VoiceChanger();
   let processedStream;
   try {
@@ -635,6 +830,33 @@ function handleRoomEvent(event) {
       if (label) label.textContent = VOICE_PRESETS[event.voice]?.label || '';
       break;
     }
+    case 'disconnected':
+      // WebSocket接続が切断された場合（ネットワーク不安定・アプリバックグラウンド等）
+      // 既存のトーストがあれば重複しないようにする
+      if (!document.getElementById('disconnectToast')) {
+        const toast = document.createElement('div');
+        toast.id = 'disconnectToast';
+        toast.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);background:#c0392b;color:#fff;padding:12px 20px;border-radius:10px;font-size:14px;z-index:999;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,.4);';
+        toast.innerHTML = '⚠️ 接続が切れました<br><button id="reconnectBtn" style="margin-top:8px;padding:6px 16px;background:#fff;color:#c0392b;border:none;border-radius:6px;font-weight:bold;cursor:pointer;">再接続する</button>';
+        document.body.appendChild(toast);
+        document.getElementById('reconnectBtn').addEventListener('click', () => {
+          toast.remove();
+          // セッション保存済みのトークンを使ってロビーへリダイレクト（再接続フロー）
+          const currentHash = location.hash.match(/^#\/room\/([^/]+)/);
+          const rid = currentHash?.[1];
+          if (rid) {
+            const savedToken = loadInvite(rid);
+            if (savedToken) {
+              roomClient?.destroy();
+              voiceChanger?.destroy();
+              location.hash = `#/room/${rid}/lobby?t=${savedToken}`;
+              return;
+            }
+          }
+          location.reload();
+        });
+      }
+      break;
   }
 }
 
