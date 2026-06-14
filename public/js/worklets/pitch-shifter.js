@@ -1,22 +1,33 @@
 // Phase Vocoder + 位相ロック(Phase Locking) + フォルマントシフト
 //
-// 【v16 主要改善: 位相ロック (Phase Locking)】
+// 【v19 改善: N=4096 (FFTサイズ倍増)】
+//
+//   N: 2048 → 4096
+//   Ha: 256 のまま → オーバーラップ率 8x → 16x に向上
+//   周波数分解能: 23.4Hz/bin → 11.7Hz/bin (2倍精細)
+//
+//   効果:
+//   ・ピーク検出の精度向上 → 位相ロックがより正確に機能
+//   ・フォルマントシフト時の補間精度が向上
+//   ・真の瞬時周波数推定がより正確 → 機械的な音が減少
+//   ・高オーバーラップ率 → OLAのスムージング効果が増大
+//
+//   トレードオフ:
+//   ・FFT計算量は約2倍（AudioWorklet専用スレッドなのでUIには影響なし）
+//   ・メモリ使用量が約2倍（Float32Array サイズが倍）
+//   ・1ホップあたりのレイテンシは変わらず約5.3ms (Ha=256/48kHz)
+//
+// 【位相ロック (Phase Locking) - v16から継承】
 //
 //   従来PVの「水っぽい・金属的」音の根本原因:
 //   → 同じ倍音に属するビン k, k+1 が独立に位相蓄積するため「垂直位相非整合」が発生。
-//   → これが詐欺音声ボイスチェンジャー特有の音色の正体。
 //
 //   位相ロックで解決:
 //   1. スペクトルピーク（倍音の中心ビン）を検出
 //   2. 各ビンを最近傍ピークに帰属
 //   3. ピークビンは従来通り位相追跡（真の瞬時周波数）
 //   4. 非ピークビンはピークの位相 + 元の相対位相オフセットを継承
-//   → 同じ倍音のビンが位相コヒーレントに → ムジカルノイズ 30〜40% 削減
-//
-// 【v16 その他改善】
-//   N: 1024 → 2048 (周波数分解能 2 倍: 46.9Hz → 23.4Hz/bin)
-//   Ha: 128 → 256 (同じ 8x オーバーラップ比率を維持)
-//   pitchRatio≈1 & formantRatio≈1 のとき FFT をスキップして入力をスルー
+//   → 同じ倍音のビンが位相コヒーレントに → ムジカルノイズ削減
 //
 // 【バグ修正継承 (旧バージョン)】
 //   ①: hsAccum で Hs ドリフト防止
@@ -73,9 +84,9 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
 
   constructor() {
     super();
-    // N=2048 で周波数分解能を倍に → 位相推定精度向上 → ムジカルノイズ低減
-    this.N  = 2048;
-    this.Ha = 256;   // N/8 (8x オーバーラップ維持)
+    // N=4096: 周波数分解能 11.7Hz/bin, 16x オーバーラップ → 位相推定精度・ムジカルノイズ低減
+    this.N  = 4096;
+    this.Ha = 256;   // N/16 (16x オーバーラップ)
 
     // Hann 窓
     this.win = new Float32Array(this.N);
@@ -98,7 +109,7 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
     this.inWritePos = 0;
     this.sampleCount = 0;
 
-    const bins = (this.N >> 1) + 1; // 1025 bins
+    const bins = (this.N >> 1) + 1; // 2049 bins
 
     // ── 位相ボコーダー用 ──
     this.lastInputPhase  = new Float32Array(bins);
@@ -120,7 +131,7 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
     this.outRe = new Float32Array(this.N);
     this.outIm = new Float32Array(this.N);
 
-    // ── 出力リングバッファ (N*32 = 65536) ──
+    // ── 出力リングバッファ (N*32 = 131072) ──
     this.outLen      = this.N * 32;
     this.outBuf      = new Float32Array(this.outLen);
     this.outWritePos = this.N;
