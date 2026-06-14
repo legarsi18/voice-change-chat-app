@@ -1,97 +1,89 @@
-// ボイスチェンジャー
-// 位相ボコーダー（ピッチ独立）+ フォルマントシフト（声道独立）+ EQ + 息感ノイズ
+// ボイスチェンジャー v16
+// 位相ロック Phase Vocoder + フォルマントシフト + 2段 EQ + 息感ノイズ
 //
-// 【ゲームキャラクター声の設計原則】
-//   声のキャラクターは「フォルマント」が8割を決める。
-//   フォルマント = 声道の共鳴周波数 = 声帯の長さ・形で決まる音色の核心。
+// 【EQ 設計（音声品質専門家監修）】
+//   処理チェーン: source → pitchNode → HP → LS → PK1 → PK2 → HS → compressor
 //
-//   formantRatio < 1.0 : 声道が長い（体が大きい/重厚な男性）→ 低く響く
-//   formantRatio > 1.0 : 声道が短い（体が小さい/女性キャラ）→ 明るく抜ける
+//   PK1/PK2 の 2 段ピーキングで各アーキタイプのEQ特性を正確に再現:
+//     M-1 重戦士: 400Hzカット(こもり除去) + 1800Hzブースト(子音明瞭度)
+//     M-2 少年:   3kHzブースト(前に出る切れ味) + PK2はニュートラル
+//     F-1 ヒロイン: 2.5kHzブースト(透明感) + 息感ノイズ(5%/3500Hz以上)
+//     F-2 ボーイッシュ: 800Hzカット(中性感・ガーリー除去) + PK2はニュートラル
 //
-// 【プリセット設計 - ゲームキャラクターアーキタイプ】
-//   none    : エフェクトなし
-//   male1   : M-1 重戦士・武人系  ─ ピッチ-4st、フォルマント下げ、200Hz厚み
-//   male2   : M-2 少年・軽快系    ─ ピッチ+1st、F2上げ、4kHz明るさ・前に出る声
-//   female1 : F-1 ヒロイン・清楚系 ─ ピッチ+3st、F2大幅上げ、2.5kHzキラキラ、息漏れ
-//   female2 : F-2 ボーイッシュ・戦士系 ─ ピッチ-1st、F1抑制、200-400Hz芯、中性感
-//
-// 【EQ設計の考え方】
-//   男性重戦士: 150Hz厚み + 2kHzプレゼンス(こもり回避) + 5kHz以上カット(重厚感)
-//   少年軽快:  120Hz以下カット(軽さ) + 4kHzブースト(抜け感・フォワード)
-//   ヒロイン:  200Hz以下カット(スッキリ) + 2.5kHzシェイプ(きらめき) + 8kHz空気感
-//   ボーイッシュ: 300Hzブースト(芯・200-400Hz帯) + 5kHz以上カット(中性感)
-//
-// 【息感(breathMix)】
-//   F-1専用。声道通過後の高域ノイズを微量ミックスして"息漏れ"質感を付加する。
-//   breathMix: 0〜0.05程度。0=なし、0.03=ほんのり息漏れ
+// 【プリセット優先順位（音声品質専門家より）】
+//   フォルマント比率 > EQ > ピッチ比率
+//   → formantRatio の設計が最も重要
 
 export const VOICE_PRESETS = {
   none: {
     label: '素の声',
-    description: 'エフェクトなし',
-    pitchRatio:   1.0,
-    formantRatio: 1.0,
+    description: 'エフェクトなし（FFTスキップ・完全スルー）',
+    pitchRatio: 1.0, formantRatio: 1.0,
     hpFreq: null,
-    lsFreq: 200,  lsGain: 0,
-    pkFreq: 1000, pkGain: 0,
-    hsFreq: 5000, hsGain: 0,
+    lsFreq: 200,  lsGain:  0,
+    pkFreq: 1000, pkGain:  0, pkQ: 1.0,
+    pk2Freq: 2000, pk2Gain: 0, pk2Q: 1.0,
+    hsFreq: 5000, hsGain:  0,
     breathMix: 0,
   },
 
   male1: {
     label: '男性 重戦士',
     description: '重みと威圧感のある武人系キャラ',
-    // ピッチ: -4 半音 → 低くどっしり
+    // ピッチ: -4 半音
     pitchRatio: 0.794,
-    // フォルマント: -18% → 体格のある声道（大柄な戦士感）
-    // ※あまり極端に下げるとこもる。0.82 が naturalness と character のバランス点
+    // フォルマント: -18%（大柄な体格感。0.78より緩和してこもり軽減）
     formantRatio: 0.82,
-    hpFreq: null,
-    lsFreq: 150,  lsGain:  3,   // 150Hz 厚み・重量感
-    pkFreq: 2000, pkGain:  2,   // 2kHz プレゼンス（こもりを防ぎ聴き取りやすく）
-    hsFreq: 5000, hsGain: -3,   // 5kHz以上カット → ダーク・重厚
+    hpFreq: 60,                        // 60Hz: ローエンドノイズ除去・胸声は残す
+    lsFreq: 120,  lsGain:  4,          // 120Hz +4dB: 胸腔共鳴（重量感）
+    pkFreq: 400,  pkGain: -3.5, pkQ: 1.5,  // 400Hz -3.5dB: こもり・箱鳴り除去（最重要）
+    pk2Freq: 1800, pk2Gain: 2.5, pk2Q: 0.9, // 1.8kHz +2.5dB: 子音明瞭度・プレゼンス
+    hsFreq: 5000, hsGain:  1,          // 5kHz +1dB: 全体の抜け感を少し維持
     breathMix: 0,
   },
 
   male2: {
     label: '男性 少年・軽快',
     description: '明るく前に出る俊敏な少年系キャラ',
-    // ピッチ: +1 半音 → やや高い（少年感）
+    // ピッチ: +1 半音（少年感）
     pitchRatio: 1.059,
-    // フォルマント: +10% → F2 上げ（前に出る明るさ・子音の鮮明さ）
+    // フォルマント: +10%（F2 上昇 → 前に出る明るさ）
     formantRatio: 1.10,
-    hpFreq: 120,                 // 120Hz 以下カット（軽さ・重くしない）
-    lsFreq: 200,  lsGain: -2,   // 低域スリム
-    pkFreq: 4000, pkGain:  3,   // 3〜5kHz ブースト → 抜け感・子音立ち
-    hsFreq: 7000, hsGain:  1,   // 7kHz 空気感
+    hpFreq: 120,                       // 120Hz: 低域カット（軽さ）
+    lsFreq: 200,  lsGain: -2,          // 200Hz -2dB: 低域スリム化
+    pkFreq: 3000, pkGain:  3, pkQ: 1.2, // 3kHz +3dB: 「前に出る」切れ味・子音立ち
+    pk2Freq: 2000, pk2Gain: 0, pk2Q: 1.0, // PK2: ニュートラル
+    hsFreq: 8000, hsGain:  4,          // 8kHz +4dB: 空気感・若さ
     breathMix: 0,
   },
 
   female1: {
     label: '女性 ヒロイン',
     description: '透明感・清楚さのあるヒロイン系キャラ',
-    // ピッチ: +3 半音 → 明るく上品
+    // ピッチ: +3 半音
     pitchRatio: 1.189,
-    // フォルマント: +25% → F1 微増＋F2 大幅増（/i/ /e/ の透明感・清潔感）
+    // フォルマント: +25%（F2 大幅上昇 → /i/ /e/ の透明感・清潔感）
     formantRatio: 1.25,
-    hpFreq: 200,                 // 200Hz 以下カット（スッキリ感）
-    lsFreq: 200,  lsGain: -2,   // 低域を締める
-    pkFreq: 2500, pkGain:  3,   // 1.5〜3kHz 倍音シェイプ（きらきら感）
-    hsFreq: 8000, hsGain:  2,   // 8kHz 空気感・抜け感
-    breathMix: 0.03,             // 息漏れ（柔らかさ・ヒロインらしさ）
+    hpFreq: 100,                       // 100Hz: 低域クリア
+    lsFreq: 250,  lsGain: -1,          // 250Hz -1dB: 胸声を少し引く
+    pkFreq: 2500, pkGain:  2, pkQ: 0.9, // 2.5kHz +2dB: 透明感・キラキラ感
+    pk2Freq: 2000, pk2Gain: 0, pk2Q: 1.0, // PK2: ニュートラル
+    hsFreq: 10000, hsGain: 5,          // 10kHz +5dB: 空気感・清楚さ
+    breathMix: 0.06,                   // 息漏れ 6%（専門家推奨: 5-7%）
   },
 
   female2: {
     label: '女性 ボーイッシュ',
     description: '芯の強い中性的な女性戦士キャラ',
-    // ピッチ: -1 半音 → ほぼ変えない（元の声に近い音域で中性感）
+    // ピッチ: -1 半音（ほぼ変えない）
     pitchRatio: 0.944,
-    // フォルマント: -10% → F1 下げ（胸声感）、F2 中庸（中性感）
+    // フォルマント: -10%（F1 下げ → 胸声感・中性感）
     formantRatio: 0.90,
-    hpFreq: 120,                 // 120Hz 以下カット
-    lsFreq: 300,  lsGain:  2,   // 200〜400Hz コア（芯・存在感）
-    pkFreq: 1000, pkGain:  0,   // ミッド フラット
-    hsFreq: 5000, hsGain: -2,   // 5kHz以上抑制（中性感・鋭さ排除）
+    hpFreq: 80,                        // 80Hz
+    lsFreq: 150,  lsGain:  2,          // 150Hz +2dB: 200〜400Hz コア（芯）
+    pkFreq: 800,  pkGain: -2, pkQ: 1.0, // 800Hz -2dB: 「女性っぽさ」の鼻腔中域を除去
+    pk2Freq: 2000, pk2Gain: 0, pk2Q: 1.0, // PK2: ニュートラル
+    hsFreq: 6000, hsGain:  2,          // 6kHz +2dB: 適度なエッジ感
     breathMix: 0,
   },
 };
@@ -105,11 +97,12 @@ export class VoiceChanger {
     this.hpFilter        = null;
     this.lsFilter        = null;
     this.pkFilter        = null;
+    this.pk2Filter       = null;   // 【新規】第2ピーキングフィルター
     this.hsFilter        = null;
     this.compressor      = null;
     this.speakerGain     = null;
     this.destinationNode = null;
-    // 息感ノイズチェーン
+    // 息感ノイズチェーン（F-1 ヒロイン専用）
     this.breathSrc       = null;
     this.breathHPF       = null;
     this.breathGain      = null;
@@ -137,6 +130,7 @@ export class VoiceChanger {
     this.sourceNode = ctx.createMediaStreamSource(stream);
     this.pitchNode  = new AudioWorkletNode(ctx, 'pitch-shifter');
 
+    // ─── EQ フィルター群 ───
     this.hpFilter = ctx.createBiquadFilter();
     this.hpFilter.type    = 'highpass';
     this.hpFilter.Q.value = 0.7;
@@ -145,12 +139,15 @@ export class VoiceChanger {
     this.lsFilter.type = 'lowshelf';
 
     this.pkFilter = ctx.createBiquadFilter();
-    this.pkFilter.type    = 'peaking';
-    this.pkFilter.Q.value = 0.8;
+    this.pkFilter.type = 'peaking';
+
+    this.pk2Filter = ctx.createBiquadFilter();  // 【新規】
+    this.pk2Filter.type = 'peaking';
 
     this.hsFilter = ctx.createBiquadFilter();
     this.hsFilter.type = 'highshelf';
 
+    // ─── ダイナミクスコンプレッサー ───
     this.compressor = ctx.createDynamicsCompressor();
     this.compressor.threshold.value = -18;
     this.compressor.knee.value      = 12;
@@ -172,10 +169,14 @@ export class VoiceChanger {
     kaGain.connect(ctx.destination);
     kaOsc.start();
 
-    // ─── 息感ノイズチェーン（F-1 ヒロイン専用）───
-    // ホワイトノイズ → HPF(2500Hz) → breathGain → compressor
-    // breathGain.gain=0 のときは無音（他プリセットに影響なし）
-    const noiseLen = ctx.sampleRate; // 1秒ループ
+    // ─── 息感ノイズチェーン（F-1 ヒロイン専用）───────────────
+    // ホワイトノイズ → HPF(3500Hz) → breathGain → compressor
+    // breathGain.gain=0 のとき無音 → 他プリセットに完全に影響なし
+    //
+    // 専門家推奨:
+    //   - HPF を 2500Hz → 3500Hz に変更（低域ノイズ混入防止）
+    //   - mix を 3% → 6% に変更（聴こえる息感に）
+    const noiseLen = ctx.sampleRate;
     const noiseBuf = ctx.createBuffer(1, noiseLen, ctx.sampleRate);
     const nd = noiseBuf.getChannelData(0);
     for (let i = 0; i < noiseLen; i++) nd[i] = Math.random() * 2 - 1;
@@ -187,16 +188,15 @@ export class VoiceChanger {
 
     this.breathHPF = ctx.createBiquadFilter();
     this.breathHPF.type            = 'highpass';
-    this.breathHPF.frequency.value = 2500;
+    this.breathHPF.frequency.value = 3500;  // 専門家推奨: 3500Hz（旧 2500Hz）
     this.breathHPF.Q.value         = 0.7;
 
     this.breathGain = ctx.createGain();
-    this.breathGain.gain.value = 0; // 初期値 0（無効）
+    this.breathGain.gain.value = 0;
 
     this.breathSrc.connect(this.breathHPF);
     this.breathHPF.connect(this.breathGain);
-    // breathGain → compressor は _buildGraph 内で接続
-    // ─────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────
 
     this._buildGraph('none');
     this.outputStream = this.destinationNode.stream;
@@ -220,6 +220,7 @@ export class VoiceChanger {
     try { this.hpFilter.disconnect();    } catch {}
     try { this.lsFilter.disconnect();    } catch {}
     try { this.pkFilter.disconnect();    } catch {}
+    try { this.pk2Filter.disconnect();   } catch {}
     try { this.hsFilter.disconnect();    } catch {}
     try { this.compressor.disconnect();  } catch {}
     try { this.breathGain.disconnect();  } catch {}
@@ -229,18 +230,22 @@ export class VoiceChanger {
     this.pitchNode.parameters.get('formantRatio').value = p.formantRatio ?? 1.0;
 
     // ─── EQ 設定 ───
-    this.lsFilter.frequency.value = p.lsFreq  ?? 200;
-    this.lsFilter.gain.value      = p.lsGain  ?? 0;
-    this.pkFilter.frequency.value = p.pkFreq  ?? 1000;
-    this.pkFilter.gain.value      = p.pkGain  ?? 0;
-    this.hsFilter.frequency.value = p.hsFreq  ?? 5000;
-    this.hsFilter.gain.value      = p.hsGain  ?? 0;
+    this.lsFilter.frequency.value  = p.lsFreq   ?? 200;
+    this.lsFilter.gain.value       = p.lsGain   ?? 0;
+    this.pkFilter.frequency.value  = p.pkFreq   ?? 1000;
+    this.pkFilter.gain.value       = p.pkGain   ?? 0;
+    this.pkFilter.Q.value          = p.pkQ      ?? 1.0;
+    this.pk2Filter.frequency.value = p.pk2Freq  ?? 2000;
+    this.pk2Filter.gain.value      = p.pk2Gain  ?? 0;
+    this.pk2Filter.Q.value         = p.pk2Q     ?? 1.0;
+    this.hsFilter.frequency.value  = p.hsFreq   ?? 5000;
+    this.hsFilter.gain.value       = p.hsGain   ?? 0;
 
-    // ─── 息感ノイズ設定 ───
+    // ─── 息感ノイズ ───
     this.breathGain.gain.value = p.breathMix ?? 0;
 
     // ─── グラフ接続 ───
-    // source → pitch → [HP →] LS → PK → HS → comp → dest
+    // source → pitch → [HP →] LS → PK → PK2 → HS → comp → dest
     this.sourceNode.connect(this.pitchNode);
 
     if (p.hpFreq) {
@@ -252,10 +257,11 @@ export class VoiceChanger {
     }
 
     this.lsFilter.connect(this.pkFilter);
-    this.pkFilter.connect(this.hsFilter);
+    this.pkFilter.connect(this.pk2Filter);  // 【新規】PK → PK2
+    this.pk2Filter.connect(this.hsFilter);  // 【新規】PK2 → HS
     this.hsFilter.connect(this.compressor);
 
-    // 息感ノイズ → comp（breathMix=0のときは接続するが無音）
+    // 息感ノイズ → comp（breathMix=0 のときは接続するが gain=0 = 無音）
     this.breathGain.connect(this.compressor);
 
     this.compressor.connect(this.destinationNode);
