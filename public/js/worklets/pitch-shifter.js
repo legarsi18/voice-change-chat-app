@@ -1,26 +1,27 @@
-// 位相ボコーダー + フォルマントシフト
+// PSOLA (Pitch Synchronous Overlap-Add) + Formant Shift
 //
-// 【2パラメーター独立制御】
-//   pitchRatio  : 基本周波数（音の高さ）を変える
-//   formantRatio: フォルマント（声道共鳴）を独立して変える
+// 【なぜ PSOLA か】
+//   位相ボコーダー（PV）は FFT ビン間の位相非整合（ムジカルノイズ）が避けられず
+//   「水っぽい・金属的」な詐欺音声風の音になる。
+//   PSOLA はピッチ周期単位で波形そのものを切り出して OLA するため：
+//   ・位相累積エラーが発生しない
+//   ・トランジェント（子音）が自然に保たれる
+//   ・倍音の位相が元の波形と一致する
+//   → 人間音声の自然さが大幅に向上する。
 //
-// これによりアニメ・ゲームキャラクター声の核心を再現できる:
-//   アニメ女性 → pitchRatio=1.19, formantRatio=1.35 (声道が短い小柄な声)
-//   渋い男性   → pitchRatio=0.84, formantRatio=0.78 (声道が長い大柄な声)
+// 【アーキテクチャ】
+//   1. 自己相関ピッチ検出 (毎 HOP_DETECT サンプル)
+//   2. ピッチ周期同期 OLA (PSOLA) でピッチシフト
+//   3. 各フレームに FFT スペクトル包絡リマップ (フォルマントシフト)
+//   4. 出力バッファ管理は旧 PV と同方式 (fracRead + lastReadInt)
 //
-// 【フォルマントシフトのしくみ】
-//   位相ボコーダーで取得した各ビンの magnitude を formantRatio でリマップする。
-//   出力ビン k に「入力ビン k/formantRatio の magnitude」を割り当てることで
-//   スペクトル包絡（フォルマント）を独立して上下できる。
-//   位相は pitchRatio でトラッキングした値を維持するため両者が独立する。
-//
-// 【修正済みバグ】(前バージョンから継承)
-//   ①: hsAccum で Hs ドリフト防止
-//   ②: lastReadIntPos で安全クリア
-//   ③: synthPhaseAccum を毎フレーム [0,2π) 正規化
+// 【パラメーター】
+//   pitchRatio   : 基本周波数倍率 (0.5〜2.0)
+//   formantRatio : フォルマント（声道）倍率 (0.5〜2.0)
 
 const TWO_PI = 2 * Math.PI;
 
+// ─── FFT (Cooley-Tukey, in-place) ───
 function fft(re, im, n) {
   for (let i = 1, j = 0; i < n; i++) {
     let bit = n >> 1;
@@ -57,144 +58,162 @@ function ifft(re, im, n) {
   for (let i = 0; i < n; i++) { re[i] *= s; im[i] = -im[i] * s; }
 }
 
-class PitchShifterProcessor extends AudioWorkletProcessor {
+// ─── PSOLA プロセッサー ───
+class PSOLAProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     return [
-      { name: 'pitchRatio',  defaultValue: 1.0, minValue: 0.5, maxValue: 2.0 },
+      { name: 'pitchRatio',   defaultValue: 1.0, minValue: 0.5, maxValue: 2.0 },
       { name: 'formantRatio', defaultValue: 1.0, minValue: 0.5, maxValue: 2.0 },
     ];
   }
 
   constructor() {
     super();
-    this.N  = 1024;
-    this.Ha = 128;
 
-    this.win = new Float32Array(this.N);
-    for (let i = 0; i < this.N; i++) {
-      this.win[i] = 0.5 * (1 - Math.cos(TWO_PI * i / this.N));
-    }
+    // ─ 入力リングバッファ (8192 サンプル) ─
+    this.IN_LEN = 8192;
+    this.inBuf  = new Float32Array(this.IN_LEN);
+    this.inWrite = 0;
 
-    {
-      let sum = 0;
-      const ctr = this.N >> 1;
-      for (let m = -this.N; m <= this.N; m += this.Ha) {
-        const idx = ctr - m;
-        if (idx >= 0 && idx < this.N) sum += this.win[idx] ** 2;
-      }
-      this.winNormBase = 1 / Math.max(sum, 1e-10);
-    }
+    // ─ ピッチ検出 ─
+    this.HOP_DETECT   = 256;          // 検出間隔
+    this.detectCount  = 0;
+    this.pitchPeriod  = 240;          // 初期値 ~200Hz (@48kHz)
+    this.pitchHistory = new Float32Array(8).fill(240);
+    this.pitchHistIdx = 0;
+    this.pitchLocked  = false;        // 無音時フラグ
 
-    this.inBuf = new Float32Array(this.N * 2);
-    this.inWritePos = 0;
-    this.sampleCount = 0;
+    // ─ PSOLA 解析フェーズ ─
+    this.analysisPhase = 0;   // 次フレームまでのサンプル数
+    this.hsAccum       = 0;   // 合成ホップの端数蓄積
 
-    const bins = (this.N >> 1) + 1;
-    this.lastInputPhase  = new Float32Array(bins);
-    this.synthPhaseAccum = new Float32Array(bins);
-    this.expectedAdv     = new Float32Array(bins);
-    for (let k = 0; k < bins; k++) {
-      this.expectedAdv[k] = TWO_PI * k * this.Ha / this.N;
-    }
-
-    // フォルマントシフト用マグニチュード保存バッファ
-    this.magnitudes = new Float32Array(bins);
-
-    this.fftRe = new Float32Array(this.N);
-    this.fftIm = new Float32Array(this.N);
-    this.outRe = new Float32Array(this.N);
-    this.outIm = new Float32Array(this.N);
-
-    this.outLen      = this.N * 32;
-    this.outBuf      = new Float32Array(this.outLen);
-    this.outWritePos = this.N;
+    // ─ 出力リングバッファ ─
+    this.OUT_LEN     = 32768;
+    this.outBuf      = new Float32Array(this.OUT_LEN);
+    // outWrite を fracRead より十分先に置く（初期レイテンシー = 2048 サンプル ≈ 43ms）
+    this.outWrite    = 2048;
     this.fracRead    = 0;
+    this.lastReadInt = 0;
 
-    this.hsAccum       = 0;
-    this.lastReadIntPos = 0;
+    // ─ FFT バッファ（各 PSOLA フレームのフォルマントシフト用）─
+    this.FFT_N     = 1024;
+    this.fftRe     = new Float32Array(this.FFT_N);
+    this.fftIm     = new Float32Array(this.FFT_N);
+    this.magnitudes = new Float32Array((this.FFT_N >> 1) + 1);
   }
 
-  _wrap(p) {
-    p = p % TWO_PI;
-    if (p >  Math.PI) p -= TWO_PI;
-    if (p < -Math.PI) p += TWO_PI;
-    return p;
-  }
+  // ─── 自己相関ピッチ検出 ───────────────────────────────────
+  // 戻り値: ピッチ周期 (サンプル数)、無音なら 0
+  _detectPitch() {
+    // 自己相関を小窓で計算
+    const N      = 1024;   // 解析窓
+    const minLag = 40;     // ~1200Hz
+    const maxLag = 600;    // ~80Hz
+    const base   = this.inWrite;
 
-  _processFrame(pitchRatio, formantRatio) {
-    const N  = this.N;
-    const Ha = this.Ha;
-    const bins = (N >> 1) + 1;
-
-    // バグ①: hsAccum で Hs ドリフトを防ぐ
-    this.hsAccum += Ha * pitchRatio;
-    const Hs = Math.max(1, Math.floor(this.hsAccum));
-    this.hsAccum -= Hs;
-
-    // Hann 窓 + FFT
+    // 信号パワー
+    let power = 0;
     for (let i = 0; i < N; i++) {
-      const idx = (this.inWritePos - N + i + this.inBuf.length) % this.inBuf.length;
-      this.fftRe[i] = this.inBuf[idx] * this.win[i];
+      const v = this.inBuf[(base - N + i + this.IN_LEN) % this.IN_LEN];
+      power += v * v;
+    }
+    if (power < 0.0005) return 0; // 無音 → 検出しない
+
+    const M = N - maxLag; // 比較サンプル数
+    let bestLag  = this.pitchPeriod | 0;
+    let bestCorr = -Infinity;
+
+    for (let tau = minLag; tau <= maxLag; tau += 2) {
+      let corr = 0;
+      for (let i = 0; i < M; i++) {
+        const a = this.inBuf[(base - N + i          + this.IN_LEN) % this.IN_LEN];
+        const b = this.inBuf[(base - N + i + tau    + this.IN_LEN) % this.IN_LEN];
+        corr += a * b;
+      }
+      if (corr > bestCorr) { bestCorr = corr; bestLag = tau; }
+    }
+
+    // 信頼度: 相関係数 (0〜1)
+    const confidence = bestCorr / (power * M / N + 1e-10);
+    return confidence > 0.20 ? bestLag : 0;
+  }
+
+  // ─── PSOLA フレーム処理 ────────────────────────────────────
+  // ・入力バッファからピッチ周期単位で波形窓を切り出す
+  // ・FFT → フォルマントシフト → IFFT
+  // ・Hann OLA で出力バッファに積み上げる
+  _processFrame(pitchRatio, formantRatio) {
+    const T  = this.pitchPeriod; // 現在のピッチ周期
+    // 窓サイズ = 2 × T（50% オーバーラップで完全再構成）、FFT_N でクランプ
+    const W  = Math.min(Math.floor(T * 2), this.FFT_N);
+    const WH = W >> 1;
+
+    // 1. ピッチ周期中心で波形を切り出し、Hann 窓を掛ける
+    const centerIdx = (this.inWrite - WH + this.IN_LEN) % this.IN_LEN;
+    for (let i = 0; i < this.FFT_N; i++) {
+      if (i < W) {
+        const idx = (centerIdx + i) % this.IN_LEN;
+        const w   = 0.5 * (1 - Math.cos(TWO_PI * i / W));
+        this.fftRe[i] = this.inBuf[idx] * w;
+      } else {
+        this.fftRe[i] = 0;
+      }
       this.fftIm[i] = 0;
     }
-    fft(this.fftRe, this.fftIm, N);
 
-    // 位相ボコーダー: 各ビンの magnitude と位相を計算
-    for (let k = 0; k < bins; k++) {
-      const mag   = Math.sqrt(this.fftRe[k] ** 2 + this.fftIm[k] ** 2);
-      const phase = Math.atan2(this.fftIm[k], this.fftRe[k]);
-      const diff  = this._wrap(phase - this.lastInputPhase[k] - this.expectedAdv[k]);
-      this.lastInputPhase[k] = phase;
+    // 2. FFT
+    fft(this.fftRe, this.fftIm, this.FFT_N);
 
-      // pitchRatio に応じた位相蓄積（ピッチシフト）
-      this.synthPhaseAccum[k] += (Hs / Ha) * (this.expectedAdv[k] + diff);
-      // バグ③: float 精度劣化防止
-      this.synthPhaseAccum[k] = ((this.synthPhaseAccum[k] % TWO_PI) + TWO_PI) % TWO_PI;
-
-      // フォルマントシフト用にマグニチュードを保存
-      this.magnitudes[k] = mag;
-    }
-
-    // 【フォルマントシフト】
-    // 出力ビン k の magnitude = 入力ビン k/formantRatio の magnitude
-    // formantRatio > 1: スペクトル包絡を上にシフト → 声道が短い（アニメ女性）
-    // formantRatio < 1: スペクトル包絡を下にシフト → 声道が長い（渋い男性）
-    // 位相は pitchRatio でトラッキングした値を維持 → ピッチとフォルマントが独立
-    for (let k = 0; k < bins; k++) {
-      let mag;
-      if (Math.abs(formantRatio - 1.0) < 0.001) {
-        mag = this.magnitudes[k];
-      } else {
-        const srcBin  = k / formantRatio;
-        const srcLow  = Math.floor(srcBin);
-        const srcHigh = Math.min(srcLow + 1, bins - 1);
-        const frac    = srcBin - srcLow;
-        mag = srcLow < bins
-          ? this.magnitudes[srcLow] * (1 - frac) + this.magnitudes[srcHigh] * frac
-          : 0;
+    // 3. フォルマントシフト（スペクトル包絡リマップ）
+    //    出力ビン k の magnitude ← 入力ビン k/formantRatio の magnitude
+    //    位相は FFT の元位相をそのまま使う（PV のような位相蓄積なし = 自然な音）
+    const bins = (this.FFT_N >> 1) + 1;
+    if (Math.abs(formantRatio - 1.0) > 0.01) {
+      for (let k = 0; k < bins; k++) {
+        this.magnitudes[k] = Math.sqrt(this.fftRe[k] ** 2 + this.fftIm[k] ** 2);
       }
-      this.outRe[k] = mag * Math.cos(this.synthPhaseAccum[k]);
-      this.outIm[k] = mag * Math.sin(this.synthPhaseAccum[k]);
+      for (let k = 0; k < bins; k++) {
+        const srcBin = k / formantRatio;
+        const srcL   = Math.floor(srcBin);
+        const srcH   = Math.min(srcL + 1, bins - 1);
+        const frac   = srcBin - srcL;
+        const mag    = srcL < bins
+          ? this.magnitudes[srcL] * (1 - frac) + this.magnitudes[srcH] * frac
+          : 0;
+        const phase = Math.atan2(this.fftIm[k], this.fftRe[k]);
+        this.fftRe[k] = mag * Math.cos(phase);
+        this.fftIm[k] = mag * Math.sin(phase);
+      }
+      // 負周波数ミラー
+      for (let k = 1; k < this.FFT_N >> 1; k++) {
+        this.fftRe[this.FFT_N - k] =  this.fftRe[k];
+        this.fftIm[this.FFT_N - k] = -this.fftIm[k];
+      }
+      this.fftRe[0]            = this.magnitudes[0]; this.fftIm[0] = 0;
+      this.fftRe[this.FFT_N >> 1] = Math.abs(this.magnitudes[this.FFT_N >> 1]); this.fftIm[this.FFT_N >> 1] = 0;
     }
 
-    // 負周波数ミラー
-    for (let k = 1; k < N >> 1; k++) {
-      this.outRe[N - k] =  this.outRe[k];
-      this.outIm[N - k] = -this.outIm[k];
-    }
-    this.outRe[0]      = this.fftRe[0]; this.outIm[0] = 0;
-    this.outRe[N >> 1] = Math.abs(this.fftRe[N >> 1]); this.outIm[N >> 1] = 0;
+    // 4. IFFT → 時間ドメイン波形
+    ifft(this.fftRe, this.fftIm, this.FFT_N);
 
-    ifft(this.outRe, this.outIm, N);
+    // 5. 合成ホップ Hs を計算（入力ピッチ周期 × pitchRatio）
+    //    hsAccum で端数を追跡してドリフト防止
+    this.hsAccum += T * pitchRatio;
+    const Hs = Math.max(1, Math.round(this.hsAccum));
+    this.hsAccum -= Hs;
 
-    const norm = this.winNormBase * (Ha / Hs);
-    for (let i = 0; i < N; i++) {
-      const pos = (this.outWritePos + i) % this.outLen;
-      this.outBuf[pos] += this.outRe[i] * this.win[i] * norm;
+    // 6. OLA：出力バッファに加算
+    //    Hann 50% オーバーラップ → 正規化係数 = 1.0（完全再構成）
+    //    ただし Hs ≠ W/2 のとき若干ズレるため (W/2)/Hs で補正
+    const norm = (W * 0.5) / Math.max(Hs, 1);
+    for (let i = 0; i < W; i++) {
+      const pos = (this.outWrite + i) % this.OUT_LEN;
+      this.outBuf[pos] += this.fftRe[i] * norm;
     }
-    this.outWritePos = (this.outWritePos + Hs) % this.outLen;
+    this.outWrite = (this.outWrite + Hs) % this.OUT_LEN;
   }
 
+  // ─── メイン処理ループ ──────────────────────────────────────
   process(inputs, outputs, parameters) {
     const input  = inputs[0]?.[0];
     const output = outputs[0]?.[0];
@@ -204,33 +223,53 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
     const formantRatio = parameters.formantRatio[0]  ?? 1.0;
 
     for (let i = 0; i < input.length; i++) {
-      this.inBuf[this.inWritePos] = input[i];
-      this.inWritePos = (this.inWritePos + 1) % this.inBuf.length;
+      // 1. 入力をリングバッファに書き込み
+      this.inBuf[this.inWrite] = input[i];
+      this.inWrite = (this.inWrite + 1) % this.IN_LEN;
 
-      if (++this.sampleCount >= this.Ha) {
-        this.sampleCount = 0;
+      // 2. ピッチ検出（HOP_DETECT サンプルごと）
+      if (++this.detectCount >= this.HOP_DETECT) {
+        this.detectCount = 0;
+        const period = this._detectPitch();
+        if (period > 0) {
+          // 直近 8 フレームの中央値でスムーシング（外れ値に強い）
+          this.pitchHistory[this.pitchHistIdx % 8] = period;
+          this.pitchHistIdx++;
+          // 中央値
+          const sorted = Array.from(this.pitchHistory).sort((a, b) => a - b);
+          this.pitchPeriod = sorted[4]; // median of 8
+          this.pitchLocked = true;
+        }
+        // 無音の場合は前回値を維持
+      }
+
+      // 3. PSOLA フレームトリガー（ピッチ周期ごと）
+      if (++this.analysisPhase >= this.pitchPeriod) {
+        this.analysisPhase -= Math.floor(this.pitchPeriod);
         this._processFrame(pitchRatio, formantRatio);
       }
 
+      // 4. 出力読み出し（補間あり）
       const readInt = Math.floor(this.fracRead);
-      const ri0 = readInt % this.outLen;
-      const ri1 = (ri0 + 1) % this.outLen;
-      const fr  = this.fracRead - readInt;
+      const ri0     = readInt % this.OUT_LEN;
+      const ri1     = (ri0 + 1) % this.OUT_LEN;
+      const fr      = this.fracRead - readInt;
       output[i] = this.outBuf[ri0] * (1 - fr) + this.outBuf[ri1] * fr;
 
-      // バグ②: 整数位置が進んだときだけクリア
-      const newIntPos = readInt % this.outLen;
-      while (this.lastReadIntPos !== newIntPos) {
-        this.outBuf[this.lastReadIntPos] = 0;
-        this.lastReadIntPos = (this.lastReadIntPos + 1) % this.outLen;
+      // 5. 読み済みバッファをクリア（旧 PV の Bug② 修正と同方式）
+      const newInt = Math.floor(this.fracRead + pitchRatio) % this.OUT_LEN;
+      while (this.lastReadInt !== newInt) {
+        this.outBuf[this.lastReadInt] = 0;
+        this.lastReadInt = (this.lastReadInt + 1) % this.OUT_LEN;
       }
 
+      // 6. fracRead を pitchRatio 分進める（pitchRatio < 1: ゆっくり読む = 低音）
       this.fracRead += pitchRatio;
-      if (this.fracRead >= this.outLen) this.fracRead -= this.outLen;
+      if (this.fracRead >= this.OUT_LEN) this.fracRead -= this.OUT_LEN;
     }
 
     return true;
   }
 }
 
-registerProcessor('pitch-shifter', PitchShifterProcessor);
+registerProcessor('pitch-shifter', PSOLAProcessor);
