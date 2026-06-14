@@ -10,7 +10,7 @@
   --border: #2a2a3a;
   --accent: #1ed11e;
   --accent2: #25FF28;
-  --glow-text: 0 0 4px #fff, 0 0 10px #25FF28, 0 0 25px #25FF28;
+  --glow-text: 0 0 2px #fff, 0 0 6px #fff, 0 0 14px #25FF28, 0 0 32px #25FF28, 0 0 60px #25FF28;
   --glow-box: 0 0 6px rgba(37,255,40,0.6), 0 0 18px rgba(37,255,40,0.25);
   --text: #e8e8f0;
   --text2: #9090a8;
@@ -96,7 +96,7 @@ html, body {
   gap: 12px;
 }
 
-.logo { font-size: 2.5rem; font-weight: 700; color: var(--accent2); letter-spacing: 0.05em; text-shadow: var(--glow-text); }
+.logo { font-size: 2.5rem; font-weight: 700; color: #fff; letter-spacing: 0.05em; text-shadow: var(--glow-text); }
 .subtitle { color: var(--text2); font-size: 14px; }
 
 .invite-box {
@@ -134,7 +134,7 @@ html, body {
 
 /* ホーム画面フォームラッパー（入力欄＋ボタンを同幅で揃える） */
 .home-form {
-  width: min(100%, 340px);
+  width: min(100% - 48px, 260px);
   display: flex;
   flex-direction: column;
 }
@@ -217,7 +217,7 @@ html, body {
   top: 0;
   z-index: 10;
 }
-.room-title { font-size: 16px; font-weight: 700; color: var(--accent2); text-shadow: var(--glow-text); }
+.room-title { font-size: 16px; font-weight: 700; color: #fff; text-shadow: var(--glow-text); }
 .participant-count { font-size: 13px; color: var(--text2); }
 .room-timer { font-size: 13px; color: var(--text2); font-variant-numeric: tabular-nums; }
 
