@@ -8,8 +8,8 @@
   --bg2: #16161f;
   --bg3: #1e1e2a;
   --border: #2a2a3a;
-  --accent: #c8962a;
-  --accent2: #e5b84a;
+  --accent: #00c840;
+  --accent2: #00ff00;
   --text: #e8e8f0;
   --text2: #9090a8;
   --danger: #c84040;
@@ -392,9 +392,9 @@ html, body {
 .vap-badge {
   font-size: 11px;
   font-weight: 700;
-  color: var(--accent);
-  background: rgba(200,150,42,0.15);
-  border: 1px solid rgba(200,150,42,0.4);
+  color: var(--accent2);
+  background: rgba(0,255,0,0.10);
+  border: 1px solid rgba(0,255,0,0.35);
   border-radius: 6px;
   padding: 2px 7px;
   white-space: nowrap;
@@ -470,20 +470,20 @@ html, body {
   padding: 7px 12px;
 }
 .vap-buttons [data-panel-test].active {
-  background: rgba(200,150,42,0.2);
+  background: rgba(0,255,0,0.15);
   border-color: var(--accent2);
   color: var(--accent2);
 }
 
-/* 金色テスト再生ボタン */
+/* 緑テスト再生ボタン */
 .btn-gold {
-  background: rgba(229,184,74,0.12);
+  background: rgba(0,255,0,0.08);
   color: var(--accent2);
-  border: 1px solid rgba(229,184,74,0.5);
+  border: 1px solid rgba(0,255,0,0.4);
   border-radius: 10px;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s;
 }
-.btn-gold:hover { background: rgba(229,184,74,0.22); }
-.btn-gold:active { background: rgba(229,184,74,0.32); }
+.btn-gold:hover { background: rgba(0,255,0,0.16); }
+.btn-gold:active { background: rgba(0,255,0,0.26); }
