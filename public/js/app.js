@@ -319,11 +319,13 @@ function renderHome(app) {
     <div class="screen home-screen">
       <div class="logo">軍議の間</div>
       <p class="subtitle">招待URLを発行してメンバーを招集</p>
-      <div class="section">
-        <label class="section-label" for="pwInput">管理者パスワード</label>
-        <input class="input" id="pwInput" type="password" placeholder="パスワードを入力">
+      <div class="home-form">
+        <div class="section">
+          <label class="section-label" for="pwInput">管理者パスワード</label>
+          <input class="input" id="pwInput" type="password" placeholder="パスワードを入力">
+        </div>
+        <button class="btn btn-primary" id="createBtn">ルームを作成する</button>
       </div>
-      <button class="btn btn-primary" id="createBtn">ルームを作成する</button>
       ${buildVoiceAdjustPanelHTML()}
     </div>
   `;

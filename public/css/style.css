@@ -8,10 +8,10 @@
   --bg2: #16161f;
   --bg3: #1e1e2a;
   --border: #2a2a3a;
-  --accent: #2bcc0a;
-  --accent2: #39FF14;
-  --glow-text: 0 0 6px #39FF14, 0 0 16px #39FF14;
-  --glow-box: 0 0 8px rgba(57,255,20,0.5), 0 0 20px rgba(57,255,20,0.2);
+  --accent: #1ed11e;
+  --accent2: #25FF28;
+  --glow-text: 0 0 4px #fff, 0 0 10px #25FF28, 0 0 25px #25FF28;
+  --glow-box: 0 0 6px rgba(37,255,40,0.6), 0 0 18px rgba(37,255,40,0.25);
   --text: #e8e8f0;
   --text2: #9090a8;
   --danger: #c84040;
@@ -131,6 +131,14 @@ html, body {
 }
 
 .section { margin-bottom: 20px; width: 100%; }
+
+/* ホーム画面フォームラッパー（入力欄＋ボタンを同幅で揃える） */
+.home-form {
+  width: min(100%, 340px);
+  display: flex;
+  flex-direction: column;
+}
+.home-form .section { margin-bottom: 0; }
 .section-label {
   display: block;
   font-size: 12px;
@@ -397,8 +405,8 @@ html, body {
   font-size: 11px;
   font-weight: 700;
   color: var(--accent2);
-  background: rgba(0,255,0,0.10);
-  border: 1px solid rgba(0,255,0,0.35);
+  background: rgba(37,255,40,0.10);
+  border: 1px solid rgba(37,255,40,0.35);
   border-radius: 6px;
   padding: 2px 7px;
   white-space: nowrap;
@@ -476,16 +484,16 @@ html, body {
   padding: 7px 12px;
 }
 .vap-buttons [data-panel-test].active {
-  background: rgba(0,255,0,0.15);
+  background: rgba(37,255,40,0.15);
   border-color: var(--accent2);
   color: var(--accent2);
 }
 
 /* ネオングリーンテスト再生ボタン */
 .btn-gold {
-  background: rgba(57,255,20,0.08);
+  background: rgba(37,255,40,0.08);
   color: var(--accent2);
-  border: 1px solid rgba(57,255,20,0.5);
+  border: 1px solid rgba(37,255,40,0.5);
   border-radius: 10px;
   font-weight: 600;
   cursor: pointer;
@@ -493,5 +501,5 @@ html, body {
   text-shadow: var(--glow-text);
   box-shadow: var(--glow-box);
 }
-.btn-gold:hover { background: rgba(57,255,20,0.16); box-shadow: 0 0 12px rgba(57,255,20,0.7), 0 0 28px rgba(57,255,20,0.3); }
-.btn-gold:active { background: rgba(57,255,20,0.26); }
+.btn-gold:hover { background: rgba(37,255,40,0.16); box-shadow: 0 0 12px rgba(37,255,40,0.7), 0 0 28px rgba(37,255,40,0.3); }
+.btn-gold:active { background: rgba(37,255,40,0.26); }
