@@ -3,9 +3,10 @@
 const WORKER_URL = ''; // _worker.js が同一オリジンでプロキシするため相対パスで良い
 
 export class RoomClient {
-  constructor({ roomId, sessionId, userMeta, onEvent }) {
+  constructor({ roomId, sessionId, token, userMeta, onEvent }) {
     this.roomId = roomId;
     this.sessionId = sessionId;
+    this.token = token;
     this.userMeta = userMeta; // { name, voice, icon, clientId }
     this.onEvent = onEvent;
 
@@ -40,6 +41,7 @@ export class RoomClient {
     // WebSocketはCORSの対象外なので workers.dev に直接接続（Braveでも問題なし）
     const wsUrl = new URL(`https://voice-chat-worker.legarsi-18k.workers.dev/api/rooms/${this.roomId}/ws`);
     wsUrl.protocol = 'wss:';
+    wsUrl.searchParams.set('token', this.token);
     wsUrl.searchParams.set('name', this.userMeta.name);
     wsUrl.searchParams.set('voice', this.userMeta.voice);
     wsUrl.searchParams.set('icon', this.userMeta.icon);

@@ -954,6 +954,7 @@ async function renderRoom(app, roomId) {
   roomClient = new RoomClient({
     roomId,
     sessionId: sessionData.sessionId,
+    token: sessionData.token,
     userMeta: { name: profile.name, voice: profile.voice, icon: profile.icon },
     onEvent: handleRoomEvent,
   });
