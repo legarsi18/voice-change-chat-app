@@ -234,10 +234,7 @@ export class VoiceChanger {
         await this.audioContext.resume();
       }
     } else {
-      // sampleRate を明示しない → iOS がセッションに最適なレートを選択する
-      // 48000 を強制すると Bluetooth HFP(8k/16k) との不一致で A2DP→HFP 切り替え時に
-      // スピーカーフォールバックが起きやすくなる
-      this.audioContext = new AudioContext();
+      this.audioContext = new AudioContext({ sampleRate: 48000 });
     }
 
     const ctx = this.audioContext;
