@@ -1092,6 +1092,18 @@ function handleRoomEvent(event) {
       if (label) label.textContent = VOICE_PRESETS[event.voice]?.label || '';
       break;
     }
+    case 'subscribe_error': {
+      // 音声トラック購読失敗 → ユーザーに通知して再接続を促す
+      if (!document.getElementById('subscribeErrorToast')) {
+        const t = document.createElement('div');
+        t.id = 'subscribeErrorToast';
+        t.style.cssText = 'position:fixed;top:60px;left:50%;transform:translateX(-50%);background:#8b4000;color:#fff;padding:12px 20px;border-radius:10px;font-size:13px;z-index:999;text-align:center;box-shadow:0 4px 12px rgba(0,0,0,.4);max-width:320px;';
+        t.innerHTML = '⚠️ 相手の音声を受信できませんでした<br><small>再接続するか、ページを再読み込みしてください</small>';
+        document.body.appendChild(t);
+        setTimeout(() => t.remove(), 8000);
+      }
+      break;
+    }
     case 'disconnected':
       // WebSocket接続が切断された場合（ネットワーク不安定・アプリバックグラウンド等）
       // 既存のトーストがあれば重複しないようにする

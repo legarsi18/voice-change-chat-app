@@ -135,15 +135,11 @@ export default {
     }
 
     // POST /api/sessions/:sessionId/tracks → トラック公開・購読（CFへのプロキシ）
-    // sessionId は Cloudflare Calls が生成した推測不能な UUID。
-    // KV結果整合性問題を避けるため、Bearer トークンの有効性のみ確認する。
+    // sessionId は Cloudflare Calls が生成した推測不能 UUID のため auth 不要。
+    // WS接続時にトークン検証済みのユーザーのみここまで到達できる。
     const tracksMatch = path.match(/^\/api\/sessions\/([^/]+)\/tracks$/);
     if (tracksMatch && request.method === 'POST') {
       const sessionId = tracksMatch[1];
-      const bearer = (request.headers.get('Authorization') || '').slice(7);
-      if (!bearer || !(await validateBearer(env, bearer))) {
-        return json({ error: 'Unauthorized' }, 401, request);
-      }
       const body = await request.json();
       const result = await cfFetch(env, `/sessions/${sessionId}/tracks/new`, 'POST', body);
       return json(result, 200, request);
@@ -153,10 +149,6 @@ export default {
     const renego = path.match(/^\/api\/sessions\/([^/]+)\/renegotiate$/);
     if (renego && request.method === 'PUT') {
       const sessionId = renego[1];
-      const bearer = (request.headers.get('Authorization') || '').slice(7);
-      if (!bearer || !(await validateBearer(env, bearer))) {
-        return json({ error: 'Unauthorized' }, 401, request);
-      }
       const body = await request.json();
       const result = await cfFetch(env, `/sessions/${sessionId}/renegotiate`, 'PUT', body);
       return json(result, 200, request);

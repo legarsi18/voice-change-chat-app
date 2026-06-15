@@ -156,7 +156,12 @@ export class RoomClient {
   _subscribeToTracks(peerSessionId, trackNames) {
     return new Promise((outerResolve) => {
       const task = async () => {
-        await this._doSubscribe(peerSessionId, trackNames);
+        try {
+          await this._doSubscribe(peerSessionId, trackNames);
+        } catch (err) {
+          console.error('[_subscribeToTracks] 音声トラック購読失敗:', peerSessionId, err);
+          this.onEvent({ type: 'subscribe_error', peerSessionId, message: err.message });
+        }
         outerResolve();
         // 次のタスクを実行
         if (this._taskQueue.length > 0) {
@@ -177,45 +182,38 @@ export class RoomClient {
   }
 
   async _doSubscribe(peerSessionId, trackNames) {
-    try {
-      const tracks = trackNames.map(trackName => ({
-        location: 'remote',
-        sessionId: peerSessionId,
-        trackName,
-      }));
+    const tracks = trackNames.map(trackName => ({
+      location: 'remote',
+      sessionId: peerSessionId,
+      trackName,
+    }));
 
-      const result = await this._apiCall(`/api/sessions/${this.sessionId}/tracks`, 'POST', { tracks });
-      console.log('[subscribeToTracks] API result for', peerSessionId, ':', JSON.stringify(result));
+    const result = await this._apiCall(`/api/sessions/${this.sessionId}/tracks`, 'POST', { tracks });
+    console.log('[subscribeToTracks] API result for', peerSessionId, ':', JSON.stringify(result));
 
-      if (result.requiresImmediateRenegotiation) {
-        if (!result.sessionDescription?.type) {
-          throw new Error(`subscribe: sessionDescription なし: ${JSON.stringify(result)}`);
-        }
-
-        // ontrack 発火を待つ Promise を先にキューへ追加してから SDP 交換する
-        const trackPromise = new Promise(resolve => {
-          this._pendingTracks.push({ peerSessionId, resolve });
-        });
-
-        // iOS WebKit: new RTCSessionDescription() でラップ必須
-        await this.peerConnection.setRemoteDescription(
-          new RTCSessionDescription(result.sessionDescription)
-        );
-        const answer = await this.peerConnection.createAnswer();
-        await this.peerConnection.setLocalDescription(answer);
-
-        await this._apiCall(`/api/sessions/${this.sessionId}/renegotiate`, 'PUT', {
-          sessionDescription: { type: answer.type, sdp: answer.sdp },
-        });
-
-        // ontrack 発火を最大 10 秒待つ
-        await Promise.race([
-          trackPromise,
-          new Promise(res => setTimeout(res, 10000)),
-        ]);
+    if (result.requiresImmediateRenegotiation) {
+      if (!result.sessionDescription?.type) {
+        throw new Error(`subscribe: sessionDescription なし: ${JSON.stringify(result)}`);
       }
-    } catch (err) {
-      console.error('[_doSubscribe] error for', peerSessionId, ':', err);
+
+      const trackPromise = new Promise(resolve => {
+        this._pendingTracks.push({ peerSessionId, resolve });
+      });
+
+      await this.peerConnection.setRemoteDescription(
+        new RTCSessionDescription(result.sessionDescription)
+      );
+      const answer = await this.peerConnection.createAnswer();
+      await this.peerConnection.setLocalDescription(answer);
+
+      await this._apiCall(`/api/sessions/${this.sessionId}/renegotiate`, 'PUT', {
+        sessionDescription: { type: answer.type, sdp: answer.sdp },
+      });
+
+      await Promise.race([
+        trackPromise,
+        new Promise(res => setTimeout(res, 10000)),
+      ]);
     }
   }
 
