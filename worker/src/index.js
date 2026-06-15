@@ -13,7 +13,7 @@ function corsHeaders(request) {
   return {
     'Access-Control-Allow-Origin': allowedOrigin,
     'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Vary': 'Origin',
   };
 }
@@ -116,12 +116,6 @@ export default {
       }
 
       const session = await cfFetch(env, '/sessions/new');
-      // sessionId を KV に登録しておき、/api/sessions/* の認証に使う
-      await env.KV.put(
-        `session:${session.sessionId}`,
-        JSON.stringify({ roomId }),
-        { expirationTtl: 60 * 60 * 24 }
-      );
       return json({ roomId, sessionId: session.sessionId }, 200, request);
     }
 
@@ -129,7 +123,10 @@ export default {
     const tracksMatch = path.match(/^\/api\/sessions\/([^/]+)\/tracks$/);
     if (tracksMatch && request.method === 'POST') {
       const sessionId = tracksMatch[1];
-      if (!(await env.KV.get(`session:${sessionId}`))) {
+      const bearer = (request.headers.get('Authorization') || '').replace('Bearer ', '');
+      // KV結果整合性問題を避けるため、長期間存在が確定しているinviteトークンで認証する
+      const tokenData = bearer ? await env.KV.get(`token:${bearer}`, 'json') : null;
+      if (!tokenData || tokenData.expiresAt < Date.now()) {
         return json({ error: 'Unauthorized' }, 401, request);
       }
       const body = await request.json();
@@ -141,7 +138,9 @@ export default {
     const renego = path.match(/^\/api\/sessions\/([^/]+)\/renegotiate$/);
     if (renego && request.method === 'PUT') {
       const sessionId = renego[1];
-      if (!(await env.KV.get(`session:${sessionId}`))) {
+      const bearer = (request.headers.get('Authorization') || '').replace('Bearer ', '');
+      const tokenData = bearer ? await env.KV.get(`token:${bearer}`, 'json') : null;
+      if (!tokenData || tokenData.expiresAt < Date.now()) {
         return json({ error: 'Unauthorized' }, 401, request);
       }
       const body = await request.json();

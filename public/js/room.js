@@ -48,10 +48,10 @@ export class RoomClient {
 
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(wsUrl.toString());
+      let connected = false;
 
       this.ws.onopen = () => {
-        // WebSocket アイドルタイムアウト防止：25秒ごとに ping を送信する
-        // Cloudflare DO は長時間無音だと接続を切ることがある
+        connected = true;
         if (this._pingInterval) clearInterval(this._pingInterval);
         this._pingInterval = setInterval(() => {
           if (this.ws?.readyState === WebSocket.OPEN) {
@@ -60,11 +60,14 @@ export class RoomClient {
         }, 25000);
         resolve();
       };
-      this.ws.onerror = reject;
+      this.ws.onerror = (e) => {
+        if (!connected) reject(new Error('WebSocket接続に失敗しました（認証エラーまたはネットワークエラー）'));
+      };
       this.ws.onmessage = (e) => this._handleSignal(JSON.parse(e.data));
       this.ws.onclose = () => {
         if (this._pingInterval) { clearInterval(this._pingInterval); this._pingInterval = null; }
-        this.onEvent({ type: 'disconnected' });
+        // 接続確立前のcloseはrejectで処理済みのためdisconnectedを発火しない
+        if (connected) this.onEvent({ type: 'disconnected' });
       };
     });
   }
@@ -356,9 +359,11 @@ export class RoomClient {
   }
 
   async _apiCall(path, method, body) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
     const res = await fetch(`${WORKER_URL}${path}`, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(body),
     });
     if (!res.ok) {
