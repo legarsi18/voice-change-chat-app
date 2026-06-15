@@ -234,7 +234,7 @@ function setupVoiceAdjustPanel() {
 
       try {
         if (!panelTestMicStream || panelTestMicStream.getTracks().every(t => t.readyState === 'ended')) {
-          panelTestMicStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+          panelTestMicStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
         }
 
         panelTestVc = new VoiceChanger(unlockCtx);
@@ -450,7 +450,7 @@ function renderLobby(app, roomId, token) {
         <div id="testStatus" class="test-status"></div>
         <!-- display:none だとiOSがplay()を拒否するため、不可視だが有効な状態にする -->
         <audio id="monitorAudio" playsinline style="position:absolute;width:0;height:0;opacity:0;pointer-events:none"></audio>
-        <p class="test-note">※ イヤホン推奨。スピーカーだとハウリングします<br>※ まずSTEP1→2→3の順に試してください</p>
+        <p class="test-note">※ イヤホン推奨。スピーカーだとハウリングします<br>※ まずSTEP1→2→3の順に試してください<br>※ Bluetoothイヤホンはマイク起動後にスピーカーに切り替わる場合があります（iOS仕様）。有線イヤホン推奨</p>
         <!-- アプリ内デバッグログ（iOSでコンソールが見えない問題の代替） -->
         <div id="debugLog" style="display:none"></div>
       </section>
@@ -548,7 +548,12 @@ function renderLobby(app, roomId, token) {
   // ─── STEP 2: マイク直接テスト（AudioWorkletなし、加工なし）───
   // これが聞こえない → マイクの接続かAudioContext.destinationの問題
   // これが聞こえる  → マイクは正常、問題はAudioWorklet（pitch-shifter）側
+  let step1Ctx = null; // STEP1のAudioContextを追跡してSTEP2前にclose
   let step2Ctx = null;
+  document.getElementById('beepTest').addEventListener('click', async () => {}, { once: false }); // placeholder only
+  // STEP1のctxを外部から参照できるよう再定義
+  document.getElementById('beepTest')._startCtx = (ctx) => { step1Ctx = ctx; };
+
   document.getElementById('micDirectTest').addEventListener('click', async () => {
     const status = document.getElementById('testStatus');
     const btn = document.getElementById('micDirectTest');
@@ -562,6 +567,12 @@ function renderLobby(app, roomId, token) {
       return;
     }
 
+    // STEP1のAudioContextが残っていれば先にclose（Bluetooth音声セッション競合防止）
+    if (step1Ctx) {
+      await step1Ctx.close().catch(() => {});
+      step1Ctx = null;
+    }
+
     // SYNC: iOS audio unlock
     const ka = document.getElementById('keepalive');
     if (ka?.paused) ka.play().catch(() => {});
@@ -571,7 +582,7 @@ function renderLobby(app, roomId, token) {
     dbg('STEP2 mic direct test start');
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
       dbg(`mic acquired: ${stream.getAudioTracks().length} track(s)`);
 
       const ctx = new AudioContext();
@@ -653,7 +664,7 @@ function renderLobby(app, roomId, token) {
     try {
       // マイクストリームを取得（既取得なら流用）
       if (!testMicStream || testMicStream.getTracks().every(t => t.readyState === 'ended')) {
-        testMicStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        testMicStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
       }
       showMicStatusBar('ok');
       dbg(`STEP3: mic ok, tracks=${testMicStream.getAudioTracks().length}`);
@@ -731,7 +742,7 @@ function renderLobby(app, roomId, token) {
       const status = document.getElementById('testStatus');
       status.textContent = 'マイク確認中…';
       try {
-        testMicStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        testMicStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
         showMicStatusBar('ok');
         status.textContent = '';
       } catch (err) {
@@ -954,7 +965,7 @@ async function renderRoom(app, roomId) {
   sharedMicStream = null;
   if (!micStream || micStream.getTracks().every(t => t.readyState === 'ended')) {
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
     } catch (err) {
       clearInterval(timerInterval);
       const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
