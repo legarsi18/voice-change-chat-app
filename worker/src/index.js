@@ -39,7 +39,9 @@ async function cfFetch(env, path, method = 'POST', body = null) {
   };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(cfRealtimeUrl(env.CF_APP_ID, path), opts);
-  return res.json();
+  let data;
+  try { data = await res.json(); } catch { data = {}; }
+  return { ok: res.ok, status: res.status, data };
 }
 
 function generateToken() {
@@ -123,7 +125,11 @@ export default {
         return json({ error: '招待リンクが無効か期限切れです' }, 401, request);
       }
 
-      const session = await cfFetch(env, '/sessions/new');
+      const cfSession = await cfFetch(env, '/sessions/new');
+      if (!cfSession.ok) {
+        return json({ error: `Cloudflare セッション作成失敗: ${cfSession.status}` }, 502, request);
+      }
+      const session = cfSession.data;
       // join 時に token を書き直してこのエッジノードの KV キャッシュを確実に更新する
       // → 直後の WS 接続でも validateToken が成功するようにする
       await env.KV.put(
@@ -141,8 +147,12 @@ export default {
     if (tracksMatch && request.method === 'POST') {
       const sessionId = tracksMatch[1];
       const body = await request.json();
-      const result = await cfFetch(env, `/sessions/${sessionId}/tracks/new`, 'POST', body);
-      return json(result, 200, request);
+      const cf = await cfFetch(env, `/sessions/${sessionId}/tracks/new`, 'POST', body);
+      if (!cf.ok) {
+        console.error('[tracks] CF error', cf.status, JSON.stringify(cf.data));
+        return json({ error: cf.data?.errorDescription || 'CF error', errorCode: cf.data?.errorCode, cfStatus: cf.status }, 502, request);
+      }
+      return json(cf.data, 200, request);
     }
 
     // PUT /api/sessions/:sessionId/renegotiate → 再ネゴシエーション
@@ -150,8 +160,12 @@ export default {
     if (renego && request.method === 'PUT') {
       const sessionId = renego[1];
       const body = await request.json();
-      const result = await cfFetch(env, `/sessions/${sessionId}/renegotiate`, 'PUT', body);
-      return json(result, 200, request);
+      const cf = await cfFetch(env, `/sessions/${sessionId}/renegotiate`, 'PUT', body);
+      if (!cf.ok) {
+        console.error('[renegotiate] CF error', cf.status, JSON.stringify(cf.data));
+        return json({ error: cf.data?.errorDescription || 'CF error', errorCode: cf.data?.errorCode, cfStatus: cf.status }, 502, request);
+      }
+      return json(cf.data, 200, request);
     }
 
     // WebSocket /api/rooms/:roomId/ws → token 検証後 Durable Object へ

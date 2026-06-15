@@ -3,12 +3,13 @@
 const WORKER_URL = ''; // _worker.js が同一オリジンでプロキシするため相対パスで良い
 
 export class RoomClient {
-  constructor({ roomId, sessionId, token, userMeta, onEvent }) {
+  constructor({ roomId, sessionId, token, userMeta, onEvent, voiceAnalyser = null }) {
     this.roomId = roomId;
     this.sessionId = sessionId;
     this.token = token;
     this.userMeta = userMeta; // { name, voice, icon, clientId }
     this.onEvent = onEvent;
+    this.voiceAnalyser = voiceAnalyser; // VoiceChangerの同一AudioContext内analyser（iOS競合回避）
 
     this.ws = null;
     this.peerConnection = null;
@@ -25,16 +26,30 @@ export class RoomClient {
     this._pendingTracks = [];
     // WebSocket keepalive ping タイマー
     this._pingInterval = null;
+    // ICE disconnected 自動復旧タイマー・実行中フラグ
+    this._iceRestartTimer = null;
+    this._iceRestarting = false;
   }
 
   async connect(processedStream) {
     this.localStream = processedStream;
+
+    // publish完了前にsubscribeのSDP交換が割り込まないよう、先にキューをブロック
+    this._subscribeRunning = true;
 
     // 1. Durable Object WebSocket 接続
     await this._connectSignaling();
 
     // 2. Cloudflare Realtime にローカル音声をパブリッシュ
     await this._publishLocalTrack();
+
+    // publish完了 → subscribeキューを解放
+    this._subscribeRunning = false;
+    if (this._taskQueue.length > 0) {
+      this._subscribeRunning = true;
+      const next = this._taskQueue.shift();
+      next();
+    }
   }
 
   async _connectSignaling() {
@@ -61,10 +76,12 @@ export class RoomClient {
         resolve();
       };
       this.ws.onerror = (e) => {
-        if (!connected) reject(new Error('WebSocket接続に失敗しました（認証エラーまたはネットワークエラー）'));
+        console.error('[WS] onerror fired. connected=', connected, 'readyState=', this.ws?.readyState);
+        if (!connected) reject(new Error('WebSocket接続に失敗しました（401認証エラーまたはネットワークエラー）'));
       };
       this.ws.onmessage = (e) => this._handleSignal(JSON.parse(e.data));
-      this.ws.onclose = () => {
+      this.ws.onclose = (e) => {
+        console.warn('[WS] onclose. code=', e.code, 'reason=', e.reason, 'connected=', connected);
         if (this._pingInterval) { clearInterval(this._pingInterval); this._pingInterval = null; }
         // 接続確立前のcloseはrejectで処理済みのためdisconnectedを発火しない
         if (connected) this.onEvent({ type: 'disconnected' });
@@ -72,27 +89,49 @@ export class RoomClient {
     });
   }
 
-  async _publishLocalTrack() {
+  // RTCPeerConnection を作成してイベントハンドラとローカルトラックを設定する
+  // リトライ時は古いPCをclose()してから再呼び出し
+  _setupPeerConnection() {
     this.peerConnection = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.cloudflare.com:3478' },
-      ],
+      iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }],
       bundlePolicy: 'max-bundle',
     });
 
     this.peerConnection.oniceconnectionstatechange = () => {
-      console.log('[PC] iceConnectionState:', this.peerConnection.iceConnectionState);
-      if (this.peerConnection.iceConnectionState === 'failed') {
-        this.peerConnection.restartIce();
+      const s = this.peerConnection?.iceConnectionState;
+      console.log('[PC] iceConnectionState:', s);
+      if (s === 'failed') {
+        console.error('[PC] ICE failed → ICE restart');
+        this._doIceRestart();
+      } else if (s === 'disconnected') {
+        // disconnected は一時的な場合があるため10秒待ってから復旧を試みる
+        if (this._iceRestartTimer) clearTimeout(this._iceRestartTimer);
+        this._iceRestartTimer = setTimeout(() => {
+          if (this.peerConnection?.iceConnectionState === 'disconnected') {
+            console.warn('[PC] ICE disconnected for 10s → ICE restart');
+            this._doIceRestart();
+          }
+        }, 10000);
+      } else if (s === 'connected' || s === 'completed') {
+        if (this._iceRestartTimer) { clearTimeout(this._iceRestartTimer); this._iceRestartTimer = null; }
       }
     };
 
-    // ontrack をここで1回だけ設定（_subscribeToTracks で上書きしない）
+    this.peerConnection.onconnectionstatechange = () => {
+      const s = this.peerConnection?.connectionState;
+      console.log('[PC] connectionState:', s);
+      if (s === 'connected') {
+        // 接続後3秒でaudioSender統計を確認
+        setTimeout(() => this._logAudioStats(), 3000);
+      }
+    };
+
+    // ontrack をここで1回だけ設定（_setupPeerConnection 呼び出しごとにリセット）
     // _pendingTracks キューの先頭と紐付けてリモート音声を接続する
     this.peerConnection.ontrack = (e) => {
       const stream = e.streams[0];
       if (!stream) {
-        console.warn('[ontrack] e.streams[0] is undefined, using track stream');
+        console.warn('[ontrack] e.streams[0] is undefined');
         return;
       }
       const pending = this._pendingTracks.shift();
@@ -106,11 +145,91 @@ export class RoomClient {
     for (const track of this.localStream.getAudioTracks()) {
       this.peerConnection.addTrack(track, this.localStream);
     }
+  }
 
+  async _publishLocalTrack() {
+    this._setupPeerConnection();
+
+    // CFセッションが無効な場合（invalid_session_description / session_error）は
+    // 新規セッションを取得してPCごと作り直し、1回だけリトライする
+    let retried = false;
+    while (true) {
+      try {
+        await this._doPublishSDP();
+        break;
+      } catch (err) {
+        // iOS SafariはICE収集失敗時にシグナリング状態をstableに自動巻き戻しする場合がある
+        // → setRemoteDescription(answer)が "wrong state: stable" で失敗する
+        // CFセッション側は offer 受信済み・answer 未受信になり次回 406 になるため、
+        // 新規セッション+新規PCのリトライで回復できる
+        const isStaleSession = err.message?.includes('invalid_session_description') ||
+                               err.message?.includes('session_error') ||
+                               err.message?.includes('wrong state');
+        if (!retried && isStaleSession) {
+          retried = true;
+          console.warn('[publishLocalTrack] CFセッション無効 → 新規セッション取得してリトライ:', err.message);
+          try {
+            await this._refreshCFSession();
+          } catch (refreshErr) {
+            console.error('[publishLocalTrack] セッション更新失敗:', refreshErr.message);
+            throw err; // 元のエラーを投げる
+          }
+          // close前にハンドラをnullにして古いPCのイベントが新PCに影響しないようにする
+          this._closePeerConnection();
+          this._setupPeerConnection();
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    // パブリッシュ完了をシグナリングサーバーに通知
+    // ws.readyState を明示ログ（OPEN=1 でない場合、A には peer_tracks が届かない）
+    console.log('[publishLocalTrack] sending publish_tracks. ws.readyState=', this.ws?.readyState, '(OPEN=1)');
+    if (this.ws?.readyState !== WebSocket.OPEN) {
+      console.error('[publishLocalTrack] ⚠️ WS is NOT open! publish_tracks will be lost → A cannot subscribe to B');
+    }
+    this._send({
+      type: 'publish_tracks',
+      sessionId: this.sessionId,
+      trackNames: ['audio'],
+    });
+
+    // 話し中検出
+    this._startSpeakingDetection();
+  }
+
+  // ハンドラをnullにしてからPCをclose（古いPCのイベントが新PCに干渉しないよう）
+  // タイマーもここでクリアして古いPCへの復旧試行を止める
+  _closePeerConnection() {
+    if (this._iceRestartTimer) { clearTimeout(this._iceRestartTimer); this._iceRestartTimer = null; }
+    if (!this.peerConnection) return;
+    this.peerConnection.oniceconnectionstatechange = null;
+    this.peerConnection.onconnectionstatechange = null;
+    this.peerConnection.ontrack = null;
+    this.peerConnection.close();
+    this.peerConnection = null;
+  }
+
+  // CFセッションを新規作成してthis.sessionIdを更新する
+  async _refreshCFSession() {
+    const res = await fetch(`${WORKER_URL}/api/rooms/${this.roomId}/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: this.token }),
+    });
+    if (!res.ok) throw new Error(`CFセッション更新失敗: ${res.status}`);
+    const data = await res.json().catch(() => ({}));
+    if (!data.sessionId) throw new Error('新CFセッションIDが取得できませんでした');
+    console.log('[refreshCFSession] 新sessionId:', data.sessionId);
+    this.sessionId = data.sessionId;
+  }
+
+  // SDP offer → CF tracks/new → setRemoteDescription → renegotiate（必要時）
+  async _doPublishSDP() {
     const offer = await this.peerConnection.createOffer();
     await this.peerConnection.setLocalDescription(offer);
 
-    // SDP の mid を取得
     const transceivers = this.peerConnection.getTransceivers();
     const tracks = transceivers.map(t => ({
       location: 'local',
@@ -139,20 +258,47 @@ export class RoomClient {
     if (result.requiresImmediateRenegotiation) {
       await this._renegotiate();
     }
+  }
 
-    // パブリッシュ完了をシグナリングサーバーに通知
-    this._send({
-      type: 'publish_tracks',
-      sessionId: this.sessionId,
-      trackNames: tracks.map(t => t.trackName),
-    });
-
-    // 話し中検出
-    this._startSpeakingDetection();
+  // ICE restart: CFに新しいofferを送り直してICE候補を更新する
+  // _subscribeRunning=true（SDP処理中）または既に実行中の場合はスキップ
+  // ICEリスタート中は subscribe の SDP 操作と並走しないよう _iceRestarting もチェック
+  async _doIceRestart() {
+    if (!this.peerConnection || this._subscribeRunning || this._iceRestarting) return;
+    this._iceRestarting = true;
+    try {
+      const offer = await this.peerConnection.createOffer({ iceRestart: true });
+      await this.peerConnection.setLocalDescription(offer);
+      const result = await this._apiCall(`/api/sessions/${this.sessionId}/renegotiate`, 'PUT', {
+        sessionDescription: { type: offer.type, sdp: offer.sdp },
+      });
+      if (result?.sessionDescription?.type) {
+        await this.peerConnection.setRemoteDescription(
+          new RTCSessionDescription(result.sessionDescription)
+        );
+      }
+      console.log('[ICE restart] renegotiation complete');
+    } catch (e) {
+      console.error('[ICE restart] failed:', e);
+      // setLocalDescription後にAPIが失敗するとPCがhave-local-offer状態で固まる
+      // → subscribe時にInvalidStateErrorが発生するためrollbackしてstableに戻す
+      if (this.peerConnection?.signalingState === 'have-local-offer') {
+        try { await this.peerConnection.setLocalDescription({ type: 'rollback' }); } catch {}
+      }
+    } finally {
+      this._iceRestarting = false;
+      // ICEリスタート中にキューイングされた subscribe タスクを起動する
+      if (this._taskQueue.length > 0 && !this._subscribeRunning) {
+        this._subscribeRunning = true;
+        const next = this._taskQueue.shift();
+        next();
+      }
+    }
   }
 
   // 購読リクエストをキューに追加してシリアル実行する
   // WebRTC はオファー/アンサー交換を同時に複数実行できないため必須
+  // ICEリスタート中の subscribe も _iceRestarting フラグで直列化する
   _subscribeToTracks(peerSessionId, trackNames) {
     return new Promise((outerResolve) => {
       const task = async () => {
@@ -172,7 +318,7 @@ export class RoomClient {
         }
       };
 
-      if (!this._subscribeRunning) {
+      if (!this._subscribeRunning && !this._iceRestarting) {
         this._subscribeRunning = true;
         task();
       } else {
@@ -191,33 +337,49 @@ export class RoomClient {
     const result = await this._apiCall(`/api/sessions/${this.sessionId}/tracks`, 'POST', { tracks });
     console.log('[subscribeToTracks] API result for', peerSessionId, ':', JSON.stringify(result));
 
-    if (result.requiresImmediateRenegotiation) {
-      if (!result.sessionDescription?.type) {
-        throw new Error(`subscribe: sessionDescription なし: ${JSON.stringify(result)}`);
-      }
-
-      const trackPromise = new Promise(resolve => {
-        this._pendingTracks.push({ peerSessionId, resolve });
-      });
-
-      await this.peerConnection.setRemoteDescription(
-        new RTCSessionDescription(result.sessionDescription)
-      );
-      const answer = await this.peerConnection.createAnswer();
-      await this.peerConnection.setLocalDescription(answer);
-
-      await this._apiCall(`/api/sessions/${this.sessionId}/renegotiate`, 'PUT', {
-        sessionDescription: { type: answer.type, sdp: answer.sdp },
-      });
-
-      await Promise.race([
-        trackPromise,
-        new Promise(res => setTimeout(res, 10000)),
-      ]);
+    // CFがエラーレスポンスを返した場合
+    if (result.errorCode || result.error) {
+      throw new Error(`CF subscribe エラー [${result.errorCode || result.cfStatus}]: ${result.errorDescription || result.error}`);
     }
+
+    // subscribeは常にrequiresImmediateRenegotiation=trueのはず
+    if (!result.requiresImmediateRenegotiation) {
+      console.error('[subscribeToTracks] 予期しないレスポンス（requiresImmediateRenegotiation=false）:', JSON.stringify(result));
+      throw new Error(`subscribe: 予期せぬCFレスポンス: ${JSON.stringify(result)}`);
+    }
+
+    // requiresImmediateRenegotiation=true（上でfalseはthrow済みなので常にここに到達）
+    if (!result.sessionDescription?.type) {
+      throw new Error(`subscribe: sessionDescription なし: ${JSON.stringify(result)}`);
+    }
+
+    const trackPromise = new Promise(resolve => {
+      this._pendingTracks.push({ peerSessionId, resolve });
+    });
+
+    await this.peerConnection.setRemoteDescription(
+      new RTCSessionDescription(result.sessionDescription)
+    );
+    const answer = await this.peerConnection.createAnswer();
+    await this.peerConnection.setLocalDescription(answer);
+
+    await this._apiCall(`/api/sessions/${this.sessionId}/renegotiate`, 'PUT', {
+      sessionDescription: { type: answer.type, sdp: answer.sdp },
+    });
+
+    await Promise.race([
+      trackPromise,
+      new Promise(res => setTimeout(res, 10000)),
+    ]);
   }
 
   _attachRemoteAudio(peerId, stream) {
+    // destroy()後（peerConnection=null）は音声要素を生成しない
+    // connect()エラー後のdestroy()とontrack発火のレースコンディション対策
+    if (!this.peerConnection) {
+      console.warn('[attachRemoteAudio] skipped: peerConnection already destroyed for', peerId);
+      return;
+    }
     // 既存の audio 要素があれば差し替え
     const existing = this.audioElements.get(peerId);
     if (existing) { existing.pause(); existing.remove(); }
@@ -234,11 +396,19 @@ export class RoomClient {
   }
 
   _startSpeakingDetection() {
-    const ctx = new AudioContext();
-    const source = ctx.createMediaStreamSource(this.localStream);
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 512;
-    source.connect(analyser);
+    // voiceAnalyser が渡された場合はVoiceChangerの同一AudioContext内のanalyserを使う
+    // → 別AudioContextを作らないことでiOSのAudioContext競合を回避
+    let analyser = this.voiceAnalyser;
+    let ownCtx = null;
+
+    if (!analyser) {
+      // フォールバック: 独自AudioContext（VoiceChangerなし環境向け）
+      ownCtx = new AudioContext();
+      const source = ownCtx.createMediaStreamSource(this.localStream);
+      analyser = ownCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+    }
 
     const data = new Uint8Array(analyser.frequencyBinCount);
     let speaking = false;
@@ -255,6 +425,30 @@ export class RoomClient {
       this.speakingDetector = requestAnimationFrame(check);
     };
     check();
+    this._speakingDetectCtx = ownCtx; // destroy時にclose
+  }
+
+  async _logAudioStats() {
+    if (!this.peerConnection) return;
+    try {
+      const stats = await this.peerConnection.getStats();
+      stats.forEach(r => {
+        if (r.type === 'outbound-rtp' && r.kind === 'audio') {
+          console.log('[AudioStats] outbound bytesSent:', r.bytesSent, 'packetsSent:', r.packetsSent);
+          if (r.bytesSent === 0) {
+            console.error('[AudioStats] ⚠️ bytesSent=0 → 音声が送信されていません');
+          }
+        }
+        if (r.type === 'media-source' && r.kind === 'audio') {
+          console.log('[AudioStats] media-source audioLevel:', r.audioLevel);
+          if (r.audioLevel === 0 || r.audioLevel === undefined) {
+            console.error('[AudioStats] ⚠️ audioLevel=0 → VoiceChangerが無音を出力しています');
+          }
+        }
+      });
+    } catch (e) {
+      console.warn('[AudioStats] getStats失敗:', e);
+    }
   }
 
   async _renegotiate() {
@@ -373,9 +567,11 @@ export class RoomClient {
 
   destroy() {
     if (this._pingInterval) { clearInterval(this._pingInterval); this._pingInterval = null; }
+    if (this._iceRestartTimer) { clearTimeout(this._iceRestartTimer); this._iceRestartTimer = null; }
     if (this.speakingDetector) cancelAnimationFrame(this.speakingDetector);
+    this._speakingDetectCtx?.close().catch(() => {});
     this.audioElements.forEach(el => { el.pause(); el.remove(); });
-    this.peerConnection?.close();
+    this._closePeerConnection();
     this.ws?.close();
   }
 }

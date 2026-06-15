@@ -1,208 +1,398 @@
-# 作戦会議アプリ 進捗メモ
+# 軍議の間 — 開発進捗・引き継ぎドキュメント
+
+最終更新: 2026-06-16
+
+---
 
 ## アプリ概要
-ゲームキャラクター風ボイスチェンジャー付き音声会議PWA。
 
-## 本番URL
-- **フロントエンド**: https://voice-change-chat-app.pages.dev
-- **Worker API**: https://voice-chat-worker.legarsi-18k.workers.dev
-- **GitHub**: https://github.com/legarsi18/voice-change-chat-app
+| 項目 | 内容 |
+|---|---|
+| 名前 | 軍議の間 |
+| フロントエンド URL | https://voice-change-chat-app.pages.dev |
+| Worker URL | https://voice-chat-worker.legarsi-18k.workers.dev |
+| Cloudflare アカウント | legarsi.18k@gmail.com |
+| GitHub | https://github.com/legarsi18/voice-change-chat-app |
+| スタック | Cloudflare Pages + Workers + Durable Objects + KV + Calls (WebRTC SFU) |
+| フロント | Vanilla JS (ES Modules) / Web Audio API + AudioWorklet / WebRTC |
+
+---
 
 ## インフラ構成
+
 | サービス | 役割 | 無料枠 |
 |---|---|---|
 | Cloudflare Pages | フロントエンド静的配信 | 無制限 |
-| Cloudflare Workers | API・トークン検証 | 10万req/日 |
-| Cloudflare Durable Objects | WebSocketシグナリング | 余裕あり |
-| Cloudflare KV | ルーム・トークン保存 | 余裕あり |
-| Cloudflare Realtime SFU | 音声中継（SFU） | 1,000GB/月（実質無制限） |
-
-## 管理者情報
-- **ルーム作成パスワード**: `aizakura0318`（メンバーには非公開）
-- **Cloudflare アカウント**: legarsi.18k@gmail.com
-- **GitHub アカウント**: legarsi18
-
-## デプロイ手順
-```bash
-# フロントエンドを更新した場合
-npx wrangler pages deploy public --project-name voice-change-chat-app --branch master --commit-dirty=true
-
-# Workerを更新した場合
-cd worker && npx wrangler deploy && cd ..
-
-# GitHubにも保存
-git add -A && git commit -m "変更内容" && git push origin master
-```
+| Cloudflare Workers | API・トークン検証・CF Callsプロキシ | 10万req/日 |
+| Cloudflare Durable Objects | WebSocketシグナリング・参加者管理・メモ永続化 | 余裕あり |
+| Cloudflare KV | ルーム・トークン保存・レート制限カウンタ | 余裕あり |
+| Cloudflare Calls (Realtime SFU) | WebRTC音声中継 | 1,000GB/月 |
 
 ---
-
-## ボイスチェンジャー設計（現状 v19）
-
-### 採用技術
-- **位相ロック Phase Vocoder (Phase Locking PV)**
-  - N=4096（v19で2048から倍増）, Ha=256, **16xオーバーラップ**
-  - 周波数分解能: 11.7Hz/bin（v16比で4倍精細）
-  - 5パスアルゴリズム（ピーク検出→帰属→位相ロック）
-- **フォルマントシフト**: pitchとformantを独立制御（重要）
-- **EQ**: HP + LowShelf + Peaking×2 + HighShelf + DynamicsCompressor
-- **none（素の声）**: FFT完全スキップ、レイテンシーゼロ・ノイズゼロ
-
-### 修正済みバグ（PV）
-- Bug①: hsAccum で Hs ドリフト防止（声のコピー）
-- Bug②: lastReadIntPos で安全クリア（ビー音）
-- Bug③: synthPhaseAccum を毎フレーム [0,2π) 正規化（ハム音）
-
-### 安全パラメータ範囲（実験で判明した限界値）
-```
-pitchRatio  : 0.84 〜 1.19（最大 ±3 半音。これ以上は詐欺音声化）
-formantRatio: 0.90 〜 1.18（0.90未満は篭り激増。1.20超は詐欺音声化）
-breathMix   : 0    （PVノイズに加算されて悪化するため全廃。v17→v18で削除）
-```
-
-### gitリバートポイント
-```bash
-# v16安定版（3バグ修正済みPV、プリセット4種）
-git checkout v16-stable -- public/js/voice-changer.js public/sw.js
-
-# v17（VOICEVOXキャラクター10プリセット、パラメータ過激版 ※使用不可レベル）
-git checkout v17-voicevox -- public/js/voice-changer.js public/sw.js
-
-# 特定コミットに戻す場合
-git log --oneline  # ハッシュ確認
-git checkout <hash> -- public/js/voice-changer.js
-```
-
----
-
-## プリセット一覧（v18〜v19 現行）
-
-| キー | ラベル | pitchRatio | formantRatio | 設計の核心 |
-|---|---|---|---|---|
-| none | 素の声 | 1.0 | 1.0 | エフェクトなし（FFTスキップ） |
-| rito | 離途 ♂ | 0.944 | 0.95 | 温もり系、180Hz+1.5dB |
-| saehaku | 黒沢冴白 ♂ | 0.891 | 0.92 | 強気・張り系、130Hz+3.5dB、2.5kHz+3.5dB |
-| kotaro | 白上虎太郎 ♂ | 1.059 | 1.08 | 少年系、1.2kHz高QピークでBoy感 |
-| takehiro | 玄野武宏 ♂ | 1.026 | 1.00 | 爽やか系、3kHz+2.5dB、9kHz+4dB |
-| ryusei | 青山龍星 ♂ | 0.841 | 0.90 | バリトン系、100Hz+5dB（formant 0.90が安全下限） |
-| bii | 猫使ビィ ♀ | 1.189 | 1.18 | 幼い系、3kHz+3.5dB、10kHz+5dB |
-| tsurugi | 中部つるぎ ♀ | 1.059 | 1.10 | 凛系、900Hz-3dBで甘さ除去 |
-| zunko | 東北ずん子 ♀ | 1.122 | 1.12 | 親しみ系、1.5kHz+1.5dB |
-| mitama | 暁記ミタマ ♀ | 1.122 | 1.12 | 儚い系、120HzHP+5kHz+2.5dB |
-| tsumugi | 春日部つむぎ ♀ | 1.189 | 1.18 | 元気系、2.5kHz+3.5dB、10kHz+5dB |
-
----
-
-## 既知の未解決問題
-
-### ① 篭り・機械的な音（最重要 → 次回セッションで対応）
-- **状況**: 常時ザー音はv18で解決。篭りと機械的な音は残存。
-- **根本**: PV固有のアーティファクト。位相ロックで削減済みだが完全解消は困難。
-- **方針**: UIパラメータ調整機能を実装し、ユーザー自身が音を作れるようにする。
-
-### ② 旧来バグ（対応保留中）
-- Bug A: ルーム作成画面クリックで音楽が止まる（silence.mp3 keepalive）
-- Bug B: テスト再生でマイク許可が毎回出る（stream.stop()後にキャッシュがない）
-- Bug C: 参加ボタンで「招待リンクが無効か期限切れ」エラー（GET→POST化が必要）
-
----
-
-## ★ 次回セッションタスク：パラメータ調整UI実装
-
-### 目的
-篭りや機械的な音を、ユーザー自身がパラメータ操作で改善できるようにする。
-
-### 実装場所
-**URL作成ページ（管理者ログイン後の画面）の下**に「ボイス調整パネル」セクションを追加。
-
-### 機能仕様
-
-#### 1. ボイス一覧 + スライダー
-- 10キャラクター + 素の声がリストで並ぶ
-- 各ボイスを展開するとパラメータスライダーが表示される
-
-#### 2. 調整できるパラメータとスライダー説明文
-| パラメータ | 表示名 | 説明文（UI表示用） | 推奨範囲 |
-|---|---|---|---|
-| pitchRatio | 声の高低 | 低くしたい→下げる / 高くしたい→上げる / 機械感が増したら戻す | 0.84〜1.19 |
-| formantRatio | 声の太細 | 篭りがひどい→1.0に近づける / キャラ感を出したい→離す（※要注意） | 0.90〜1.18 |
-| lsGain | 低音の強さ | 重くしたい→上げる / 軽くしたい・篭る→下げる | -4〜+5 dB |
-| pkFreq | 中域EQの周波数 | 篭る帯域を特定してその周波数を設定（人の声の主要域: 300〜3000Hz） | 200〜4000 Hz |
-| pkGain | 中域EQの強さ | 篭りをカット→下げる / 前に出したい→上げる | -6〜+6 dB |
-| pk2Freq | 中高域EQの周波数 | プレゼンス・明るさの調整（主要域: 2000〜6000Hz） | 1000〜8000 Hz |
-| pk2Gain | 中高域EQの強さ | 明るくしたい・キャラ感→上げる / 耳障り・ノイズっぽい→下げる | -6〜+6 dB |
-| hsGain | 高音・空気感 | シャリシャリ感・空気感→上げる / ノイズっぽい・機械的→下げる | -3〜+6 dB |
-
-#### 3. ボタン
-- **「▶ テスト再生」ボタン**: マイク音声をリアルタイムプレビュー（スライダーを動かしながら確認）
-- **「💾 保存」ボタン**: localStorageにカスタム値を保存（次回起動時も維持）
-- **「↩ デフォルトに戻す」ボタン**: voice-changer.jsのデフォルト値にリセット
-
-### データ保持の仕様
-```javascript
-// localStorageに保存するキー（既存のprofileとは別）
-'voiceCustomParams' = {
-  rito: { pitchRatio: 0.944, formantRatio: 0.95, lsGain: 1.5, ... },
-  saehaku: { ... },
-  ...
-}
-
-// 読み込み優先順位
-// カスタム保存値 → VOICE_PRESETS デフォルト値
-```
-
-### 関連ファイル（修正が必要なもの）
-| ファイル | 変更内容 |
-|---|---|
-| `public/js/app.js` | パラメータUI描画・localSave/Load・テスト再生ロジック |
-| `public/css/style.css` | スライダーのスタイル追加 |
-| `public/index.html` | パネルのHTML挿入（管理者画面の下） |
-| `public/js/voice-changer.js` | setPreset()でカスタム値を優先的に使う処理を追加 |
-
----
-
-## アプリ機能（実装済み）
-- [x] ホーム画面（管理者パスワード付きルーム作成）
-- [x] 招待URL発行（7日間有効なトークン）
-- [x] ロビー画面（参加前にアイコン・名前・ボイス設定）
-- [x] 設定のlocalStorage引き継ぎ（次回自動入力）
-- [x] ボイスチェンジャー11種（素の声+VOICEVOXキャラクター10種）
-- [x] テスト再生ボタン（※イヤホン推奨）
-- [x] 通話画面（参加者アイコン表示・話し中インジケーター）
-- [x] 共有メモ機能
-- [x] 通話経過時間タイマー（3時間で警告）
-- [x] 声の切り替え（通話中も可能）
-- [x] ミュートボタン
-- [x] PWA対応（ホーム画面追加可能）
-- [x] iOSバックグラウンド音声維持（silence.mp3 keepalive）
-- [x] 戦国テーマSVGアイコン8種（男性4・女性4）
-- [x] アイコン自前アップロード対応
-- [x] 再入室バグ修正（DO storage + invite token persistence）
-- [x] WebSocket keepalive ping (25秒間隔)
-- [x] 位相ロックPV（ムジカルノイズ削減）
-- [x] N=4096 高精度FFT（16xオーバーラップ、11.7Hz/bin解像度）
 
 ## ファイル構成
+
 ```
 voice-change-chat-app/
-├── PROGRESS.md              ← このファイル
-├── .gitignore
-├── worker/                  ← Cloudflare Worker（バックエンド）
-│   ├── wrangler.toml        ← KV IDが記載済み
-│   ├── package.json
+├── PROGRESS.md              ← このファイル（引き継ぎ）
+├── worker/
+│   ├── wrangler.toml        ← KV ID / DO 設定
 │   └── src/
-│       ├── index.js         ← API routes（ルーム作成・参加・WebSocket）
-│       └── room-do.js       ← Durable Object（WebSocketシグナリング・DO storage）
-└── public/                  ← Cloudflare Pages（フロントエンド）
-    ├── index.html           ← PWA対応HTML
-    ├── manifest.json
-    ├── sw.js                ← Service Worker (現在 v19)
-    ├── silence.mp3          ← iOSバックグラウンド用無音ファイル
+│       ├── index.js         ← API routes（認証・CF Callsプロキシ）
+│       └── room-do.js       ← Durable Object（WS管理・参加者リスト・メモ）
+└── public/
+    ├── index.html           ← PWA対応（keepalive audio要素あり）
+    ├── manifest.json / sw.js
+    ├── silence.mp3          ← iOSバックグラウンド用無音
     ├── icons/               ← SVGアイコン8種
-    ├── css/style.css        ← 全スタイル
+    ├── css/style.css
     └── js/
-        ├── app.js           ← メインUI・ルーティング（VOICE_PRESETSからUI自動生成）
-        ├── room.js          ← WebRTC + Cloudflare Realtime（pingキープアライブ含む）
-        ├── voice-changer.js ← ボイスチェンジャー本体（PV+フォルマント+EQ）
+        ├── app.js           ← ルーティング・UI全体・ルームイベントハンドラ
+        ├── room.js          ← RoomClient（WebRTC + WS管理）
+        ├── voice-changer.js ← VoiceChanger（AudioWorklet pitch-shifter）
         └── worklets/
-            └── pitch-shifter.js ← AudioWorkletピッチシフター（N=4096 位相ロックPV）
+            └── pitch-shifter.js  ← AudioWorkletProcessor（要 sampleRate:48000）
 ```
+
+---
+
+## デプロイ手順
+
+```bash
+# Worker デプロイ
+npx wrangler deploy --config worker/wrangler.toml
+
+# Pages デプロイ
+npx wrangler pages deploy public --project-name voice-change-chat-app
+```
+
+---
+
+## 技術的な重要ポイント（変更時は必ず確認）
+
+### ⚠️ 絶対に変えてはいけないこと
+
+1. **`sampleRate: 48000`** を VoiceChanger の AudioContext から外さないこと
+   → pitch-shifter.js が 48kHz 前提。外すと「ルーム接続エラー」が発生する
+
+2. **sessions エンドポイントに auth を追加しないこと**
+   → KV 結合性バグ（別エッジノードへの伝播遅延最大60秒）で再発する
+   → sessionId は CF が発行する推測不能 UUID なので auth 不要
+
+3. **`_doSubscribe` の try-catch を戻さないこと**
+   → エラーが握り潰されて subscribe 失敗が無音で通過してしまう
+
+4. **iOS テストは必ず Safari で行うこと**
+   → Brave は WebRTC/WS 制限あり（参加不可）
+
+5. **publish retry で rollback を使わないこと（PCを閉じて新規作成する）**
+   → iOS Safari は `setLocalDescription({type:'rollback'})` の動作が不安定
+   → `_closePeerConnection()` + `_setupPeerConnection()` で新規 PC を作るのが正解
+   → ※ `_doIceRestart()` の catch での rollback は例外（PC を閉じると全サブスクリプションが消えるため）
+
+### 認証フロー
+
+```
+/api/rooms (POST)              ← パスワード認証 → roomId + token (KV TTL 7日)
+/api/rooms/:id/lobby?t=TOKEN   ← ロビー画面（tokenをlocalStorageへ保存）
+/api/rooms/:id/join (POST)     ← token検証 → CF Callsセッション作成 → sessionId返却
+/api/rooms/:id/ws?token=TOKEN  ← WS接続 → DO管理
+/api/sessions/:id/tracks (POST)      ← 認証なし（CF Callsへプロキシ）
+/api/sessions/:id/renegotiate (PUT)  ← 認証なし（CF Callsへプロキシ）
+```
+
+### WebRTC 音声フロー
+
+```
+マイク (getUserMedia + AEC適用済み)
+  → VoiceChanger
+      AudioContext(48kHz) → AudioWorklet(pitch-shifter) → compressor
+      → analyserNode（speaking検出タップ）
+      → MediaStreamDestination.stream
+  → RTCPeerConnection.addTrack()
+  → CF Calls SFU
+  → 相手の ontrack → <audio> 再生
+```
+
+### CF Calls SDP シーケンス（publish）
+
+```
+createOffer() → setLocalDescription(offer) → have-local-offer
+→ POST /sessions/:id/tracks  (offer + tracks情報)
+→ CF returns answer + requiresImmediateRenegotiation
+→ setRemoteDescription(answer) → stable
+→ if requiresImmediateRenegotiation: _renegotiate()
+```
+
+### CF Calls SDP シーケンス（subscribe）
+
+```
+POST /sessions/:id/tracks (remote trackInfo)
+→ CF returns offer + requiresImmediateRenegotiation=true
+→ setRemoteDescription(CF offer) → have-remote-offer
+→ createAnswer() → setLocalDescription(answer) → stable
+→ PUT /sessions/:id/renegotiate (answer)
+→ ontrack 発火 → <audio> 再生
+```
+
+### KV Eventual Consistency 対策
+
+- join 時に token を KV に再書き込み（同エッジノードのキャッシュを確実に更新）
+- sessions エンドポイントは auth 不要に変更（根本解決）
+
+### SDP 操作の直列化
+
+`room.js` の SDP 操作は `_subscribeRunning` / `_iceRestarting` の2フラグで完全に直列化されている。
+
+```
+connect() 中:         _subscribeRunning = true  → subscribe タスクはキューへ
+publish 完了後:       _subscribeRunning = false → キュードレイン
+ICEリスタート開始:    _iceRestarting = true     → 新規 subscribe もキューへ
+ICEリスタート完了:    finally で _iceRestarting = false → キュードレイン
+```
+
+---
+
+## 実装済み機能
+
+- [x] ホーム画面（管理者パスワード付きルーム作成 + 招待URL発行）
+- [x] ロビー画面（アイコン・名前・ボイス設定）
+- [x] STEP1〜3 段階マイクテスト（ビープ→生マイク→ボイスチェンジ）
+- [x] ボイスチェンジャー 11種（素の声 + VOICEVOXキャラクター 10種）
+- [x] ボイス調整パネル（8パラメータスライダー / localStorageカスタム保存）
+- [x] テスト再生ボタン（リアルタイムプレビュー）
+- [x] 通話画面（参加者カード・話し中リング・タイマー）
+- [x] 共有メモ機能
+- [x] 通話中ボイス切り替え・ミュートボタン
+- [x] 退出後画面（#/left/:roomId / 再参加ボタン / 期限切れメッセージ）
+- [x] PWA対応（ホーム画面追加 / Service Worker）
+- [x] iOSバックグラウンド音声維持（silence.mp3 keepalive）
+- [x] WebSocket keepalive ping（25秒間隔）
+- [x] 戦国テーマSVGアイコン8種 + カスタム画像アップロード
+
+---
+
+## ボイスチェンジャー設計（v18）
+
+### アルゴリズム
+- **位相ロック Phase Vocoder**（N=4096, Ha=256, 16xオーバーラップ）
+- **フォルマントシフト**（pitch と formant を独立制御）
+- **EQ**: HP + LowShelf + Peaking×2 + HighShelf + DynamicsCompressor
+- **素の声（none）**: FFT 完全スキップ（レイテンシーゼロ）
+
+### 安全パラメータ範囲
+
+```
+pitchRatio  : 0.84〜1.19（±3半音。超えると詐欺音声化）
+formantRatio: 0.90〜1.18（0.90未満=篭り激増 / 1.20超=詐欺音声化）
+breathMix   : 0（全廃。PVノイズに加算されて悪化するため）
+```
+
+### プリセット一覧
+
+| キー | ラベル | pitch | formant |
+|---|---|---|---|
+| none | 素の声 | 1.0 | 1.0 |
+| rito | 離途 ♂ | 0.944 | 0.95 |
+| saehaku | 黒沢冴白 ♂ | 0.891 | 0.92 |
+| kotaro | 白上虎太郎 ♂ | 1.059 | 1.08 |
+| takehiro | 玄野武宏 ♂ | 1.026 | 1.00 |
+| ryusei | 青山龍星 ♂ | 0.841 | 0.90 |
+| bii | 猫使ビィ ♀ | 1.189 | 1.18 |
+| tsurugi | 中部つるぎ ♀ | 1.059 | 1.10 |
+| zunko | 東北ずん子 ♀ | 1.122 | 1.12 |
+| mitama | 暁記ミタマ ♀ | 1.122 | 1.12 |
+| tsumugi | 春日部つむぎ ♀ | 1.189 | 1.18 |
+
+---
+
+## 修正履歴
+
+### 過去セッション（〜2026-06-15）
+
+| 修正 | 内容 |
+|---|---|
+| セキュリティ強化 | CORS制限 / WS token認証 / ルーム作成レート制限 |
+| 参加リダイレクトループ修正 | `!sessionData.token` → `!sessionData` チェックに変更 |
+| 退出後画面新設 | `#/left/:roomId` / 再参加ボタン / 期限切れメッセージ |
+| 音声遅延対策 | `voiceChanger.destroy()` を async 化（AudioContext.close() を await） |
+| 音声無音バグ修正 | sessions認証削除 / `_doSubscribe` try-catch削除 / subscribe_errorトースト追加 |
+| 非対称音声バグ修正 | iOS AudioContext競合解消（analyserNode共有）/ cfFetchエラー502返却 / requiresImmediateRenegotiation=false throw |
+
+### 今セッション続き2（2026-06-16）— SW キャッシュ・ゴースト音声・`#/`リダイレクトの根本解決
+
+#### 根本原因（3層構造）
+
+**症状**: B が参加できたが一瞬で管理者画面（`#/`）へ遷移、A の声が管理者画面で聞こえる、B は A の画面に表示されない
+
+1. **SW（Service Worker）が旧 app.js をキャッシュ** (`sakusen-v26`)
+   - 旧コードでは `connect()` エラー時に `location.hash = '#/'`（管理者画面）へ遷移
+   - 旧コードでは `roomClient.destroy()` がエラーハンドラーで呼ばれないため、音声要素（`<audio>` in body）が残留
+   - B の「管理者画面で A の声が聞こえる」は、**前回テスト**で生成した孤立音声要素の残留
+
+2. **`renderHome/renderLobby/renderLeft` にroomClientクリーンアップがない**
+   - ブラウザの戻るボタンでルーム画面から離れた場合、roomClient（WS + WebRTC）が生きたまま残る
+   - subscribe が完了すると音声要素が document.body に追加され続ける
+
+3. **`_attachRemoteAudio` が `destroy()` 後にも音声要素を生成する**
+   - `connect()` エラー後の `destroy()` 完了前に `ontrack` が発火した場合、孤立音声要素が生まれる
+
+**修正**:
+- `sw.js`: CACHE バージョンを `sakusen-v27` に更新 → B のブラウザが新鮮なコードを取得
+- `app.js`: `_leaveRoomCleanup()` 関数を追加し、`renderHome/renderLobby/renderLeft` の先頭で呼出す
+- `room.js`: `_attachRemoteAudio` で `peerConnection` が null（destroyed後）なら生成スキップ
+- `room.js`: WS `onclose`/`onerror` に詳細ログ追加
+- `room.js`: `publish_tracks` 送信時に WS 状態をログ出力（WS が閉じている場合に A へ届かない原因を可視化）
+
+### 今セッション続き（2026-06-16）— CF セッション stale 問題の根本解決
+
+#### 8. B が参加できない根本原因（CFセッションの stale 問題）
+
+**原因**:
+- lobby の「参加」ボタンで POST /join → CF session X → localStorage に保存 → ルーム画面遷移
+- ルーム画面は localStorage の session X を使用して接続を試みる
+- **但し**: iOS のページリロードや前回の接続失敗（10分以内）で同じ session X を再利用してしまう
+- CF session X がすでに「offer を送ったが answer がない」状態で固着 → 406 `invalid_session_description`
+- 既存のリトライ（`_refreshCFSession()`）でもなぜか解決しないケースがあった
+
+**根本修正** (`app.js`):
+- `renderLobby()` の参加ボタンから POST `/join` の呼び出しを削除（sessionId を localStorage に保存しない）
+- `renderRoom()` で毎回 POST `/join` して新鮮な CF sessionId を取得してから RoomClient を生成
+- → stale session を使う可能性が構造的にゼロになる
+
+**副次修正** (`room.js`):
+- `_refreshCFSession()` が失敗した際の catch を追加（元のエラーを投げる）
+
+---
+
+### 今セッション（2026-06-16）— room.js / app.js 大規模修正
+
+#### 1. B が参加できない問題（406 / 410 エラー）
+
+**原因**: localStorage に古い CF sessionId が残っており、再接続時に CF が `invalid_session_description`（406）または `session_error`（410）を返す。
+
+**修正** (`room.js`):
+- `_publishLocalTrack()` にリトライループを追加
+- `_refreshCFSession()`: POST `/api/rooms/:id/join` で新規 CF session 取得
+- `_closePeerConnection()` + `_setupPeerConnection()`: ハンドラ null → close → 新 PC 作成
+- エラーが `invalid_session_description` / `session_error` を含む場合 1回だけリトライ
+
+#### 2. iOS Safari ICE 自動ロールバック（"wrong state: stable"）
+
+**原因**: `setLocalDescription(offer)` → API await 中に iOS Safari が ICE 収集失敗で signaling state を `stable` に自動ロールバック → `setRemoteDescription(answer)` が "Called in wrong state: stable" で失敗。
+
+**修正** (`room.js`):
+- `isStaleSession` の判定条件に `'wrong state'` を追加
+- → 新規 CF session + 新規 PC でリトライ → 回復
+
+#### 3. ICE restart の完全実装
+
+**原因**: 元の実装は `restartIce()` のみで CF に SDP が伝わっていなかった。
+
+**修正** (`room.js`):
+- `_doIceRestart()`: `createOffer({iceRestart:true})` → `setLocalDescription` → PUT `/renegotiate` → `setRemoteDescription`
+- ICE restart 中の subscribe 競合防止: `_iceRestarting` フラグを `_subscribeToTracks()` でもチェック
+- `_iceRestarting` を `finally` でリセット（`connected` イベント依存だと固着する）
+- finally でキューイングされた subscribe タスクを起動
+- catch: `have-local-offer` 固着時に rollback を試みる（iOS Safari では try/catch で保護）
+
+#### 4. ghost session 防止（B のエラー後も A の画面に B が残る）
+
+**原因**: connect エラー時に `roomClient = null` のみで `destroy()` を呼んでいなかった → WS が生き続ける。
+
+**修正** (`app.js`):
+- 全 connect エラーパスで `roomClient.destroy()` を呼ぶ
+- `roomClient.onEvent = () => {}` → `destroy()` → `roomClient = null` の順序を統一
+
+#### 5. disconnect トーストが遷移先ページに表示される問題
+
+**原因**: `destroy()` が `ws.close()` を呼ぶと `onclose` → `onEvent('disconnected')` → 新ページにトーストが出る。
+
+**修正** (`app.js`):
+- 全 `destroy()` 呼び出し前に必ず `roomClient.onEvent = () => {}` を設定
+- 対象: connect エラー / leaveYes / reconnectBtn
+
+#### 6. エラー後に管理者ホーム（`#/`）に遷移する問題
+
+**修正** (`app.js`):
+- 全エラーパスで `loadInvite(roomId)` → トークンあり → `#/room/:id/lobby?t=TOKEN`、なし → `#/left/:id`
+
+#### 7. その他の修正
+
+- `_closePeerConnection()` で `_iceRestartTimer` もクリア（古いタイマーが新 PC に発火しないよう）
+- `reconnectBtn` で `roomClient = null` / `voiceChanger = null` を追加
+- `destroy()` 内の `_iceRestartTimer` クリアを `_closePeerConnection()` と二重にしたが無害
+
+---
+
+## 現在のデプロイ状況
+
+| 項目 | 内容 |
+|---|---|
+| 最新デプロイ URL | https://95c11a27.voice-change-chat-app.pages.dev |
+| デプロイ日時 | 2026-06-16 |
+| 修正対象ファイル | `public/js/app.js` |
+
+---
+
+## 🔴 次回セッション最初のタスク（必ずここから始める）
+
+最新デプロイ: https://7a27ba9a.voice-change-chat-app.pages.dev
+
+### テスト結果の受け取りと判断
+
+ユーザーから「今回の修正後のテスト結果」を報告してもらう。
+
+**確認すべき項目:**
+
+| 確認項目 | 期待結果 |
+|---|---|
+| B がルームに参加できるか | エラーなく参加できる（もしくはリトライで自動回復） |
+| A の声が B に聞こえるか | 双方向音声が成立する |
+| B の声が A に聞こえるか | 同上 |
+| エラー後の遷移先 | `#/room/:id/lobby` または `#/left/:id`（管理者ホームでない） |
+| ghost session | エラー後に A の画面から B のカードが消える |
+| disconnect トースト | 遷移先ページに出ない |
+
+**問題が残っていた場合のデバッグ手順:**
+
+```
+B参加時に「ルーム接続エラー」が出る場合:
+  → エラーメッセージの全文を確認
+  → "wrong state" / "invalid_session_description" / "session_error" 以外のメッセージ
+     → isStaleSession 条件にさらに追加が必要
+
+音声が届かない場合:
+  → Safari コンソールで以下を確認
+     [AudioStats] bytesSent=0  → VoiceChanger が無音送信
+     [AudioStats] audioLevel=0 → VoiceChanger 出力が無音
+     subscribe_error トースト   → CF subscribe 失敗
+     [PC] connectionState: connected が出ているか
+
+B 参加後に A の画面に B が残る場合:
+  → ghost session が再発
+  → destroy() が呼ばれているか確認
+```
+
+**問題なければ:**
+バックログに着手する（下記参照）。
+
+---
+
+## バックログ（優先度低）
+
+| # | 内容 | 備考 |
+|---|---|---|
+| Bug A | ルーム作成画面クリックで音楽が止まる（silence.mp3 keepalive） | |
+| Bug B | テスト再生でマイク許可が毎回出る | |
+| 改善 | token TTL の見直し（現在7日 / 24時間に短縮検討） | ユーザー判断待ち |
+
+---
+
+## 既知の仕様上の限界（修正不要）
+
+| 項目 | 内容 |
+|---|---|
+| iOS Bluetooth イヤホン | getUserMedia で A2DP→HFP 切り替わりスピーカー化。Web API から制御不可。有線推奨 |
+| ICE failed during subscribe | subscribe 実行中に ICE が failed になるとリスタートがスキップ。極めて稀。ユーザーは再接続で回復 |
+| stale sessionId が毎回 retry を誘発 | localStorage の古い sessionId → 毎起動で retry。透過的で1秒未満のため許容 |

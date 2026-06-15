@@ -317,7 +317,21 @@ function setupVoiceAdjustPanel() {
   });
 }
 
+function _leaveRoomCleanup() {
+  // ルーム以外の画面への遷移時に必ず呼ぶ。ブラウザの戻るボタンでルームから離れた場合も含む。
+  if (roomClient) {
+    roomClient.onEvent = () => {};
+    roomClient.destroy();
+    roomClient = null;
+  }
+  if (voiceChanger) {
+    voiceChanger.destroy().catch(() => {});
+    voiceChanger = null;
+  }
+}
+
 function renderHome(app) {
+  _leaveRoomCleanup();
   app.innerHTML = `
     <div class="screen home-screen">
       <div class="logo">軍議の間</div>
@@ -392,6 +406,7 @@ function renderHome(app) {
 // ロビー画面
 // ───────────────────────────────────────────
 function renderLobby(app, roomId, token) {
+  _leaveRoomCleanup();
   // 招待トークンを保存しておく → セッション切れで直接ルームURLにアクセスした時に
   // ロビーへ自動リダイレクトできるようにする
   if (token) saveInvite(roomId, token);
@@ -752,16 +767,6 @@ function renderLobby(app, roomId, token) {
       console.log('[join] roomId:', roomId, 'token:', token);
       if (!token) throw new Error('招待トークンが見つかりません。招待URLを使って開いてください');
 
-      const res = await fetch(`${WORKER_URL}/api/rooms/${roomId}/join`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token }),
-      });
-      const data = await res.json().catch(() => ({}));
-      console.log('[join] response:', res.status, data);
-      if (!res.ok) throw new Error(data.error || `接続エラー (${res.status})`);
-      if (!data.sessionId) throw new Error('セッションIDが取得できませんでした');
-
       // プレビューを停止してストリームをルームに引き継ぐ
       if (isMonitoring) {
         monitorAudio.pause();
@@ -776,7 +781,8 @@ function renderLobby(app, roomId, token) {
       sharedMicStream = testMicStream;
       testMicStream = null;
 
-      saveSession({ sessionId: data.sessionId, roomId, token, joinedAt: Date.now() });
+      // CFセッションIDはルーム画面遷移時に毎回取得するため、ここでは保存しない
+      saveSession({ roomId, token, joinedAt: Date.now() });
       location.hash = `#/room/${roomId}`;
     } catch (err) {
       btn.disabled = false;
@@ -844,6 +850,7 @@ function showMicError(err, statusEl) {
 // 退出完了画面
 // ───────────────────────────────────────────
 function renderLeft(app, roomId) {
+  _leaveRoomCleanup();
   const savedToken = loadInvite(roomId);
   app.innerHTML = `
     <div class="screen home-screen">
@@ -873,6 +880,17 @@ function renderLeft(app, roomId) {
 // 通話画面
 // ───────────────────────────────────────────
 async function renderRoom(app, roomId) {
+  // 前回セッションのリソースを確実にクリーンアップ（退出ボタンを押さずに戻ってきた場合）
+  if (roomClient) {
+    roomClient.onEvent = () => {}; // disconnectedトーストが新ルーム画面に出ないよう抑制
+    roomClient.destroy();
+    roomClient = null;
+  }
+  if (voiceChanger) {
+    await voiceChanger.destroy().catch(() => {});
+    voiceChanger = null;
+  }
+
   const sessionData = loadSession(roomId);
   if (!sessionData) {
     const savedToken = loadInvite(roomId);
@@ -885,6 +903,7 @@ async function renderRoom(app, roomId) {
     location.hash = '#/';
     return;
   }
+
 
   app.innerHTML = `
     <div class="screen room-screen">
@@ -962,13 +981,12 @@ async function renderRoom(app, roomId) {
         ? '\n\niOSの場合: 設定 → ブラウザアプリ → マイク → オン\nその後ページを再読み込みしてください'
         : '\n\nアドレスバーの🔒 → サイトの設定 → マイク → 許可\nその後ページを再読み込みしてください';
       alert(`マイクへのアクセスが拒否されています。${hint}`);
-      location.hash = '#/';
+      const savedTokenMic = loadInvite(roomId);
+      location.hash = savedTokenMic ? `#/room/${roomId}/lobby?t=${savedTokenMic}` : `#/left/${roomId}`;
       return;
     }
   }
 
-  // VoiceChanger: ルーム参加時はjoinBtnで既にiOS audio sessionがアンロック済み
-  // （joinBtn click → keepalive.play() + new AudioContext().resume() を同期で実行済み）
   voiceChanger = new VoiceChanger();
   let processedStream;
   try {
@@ -977,26 +995,72 @@ async function renderRoom(app, roomId) {
     await voiceChanger.resume();
   } catch (err) {
     clearInterval(timerInterval);
+    voiceChanger.destroy();
+    voiceChanger = null;
     alert(`音声初期化エラー: ${err.message}`);
-    location.hash = '#/';
+    const savedTokenVc = loadInvite(roomId);
+    location.hash = savedTokenVc ? `#/room/${roomId}/lobby?t=${savedTokenVc}` : `#/left/${roomId}`;
     return;
+  }
+
+  // 毎回新しいCFセッションを取得（古いセッションIDの再利用による406エラーを根本防止）
+  let cfSessionId;
+  {
+    let joinStatus = 0;
+    try {
+      const joinRes = await fetch(`${WORKER_URL}/api/rooms/${roomId}/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: sessionData.token }),
+      });
+      joinStatus = joinRes.status;
+      const joinData = await joinRes.json().catch(() => ({}));
+      if (!joinRes.ok) throw new Error(joinData.error || `接続エラー (${joinRes.status})`);
+      if (!joinData.sessionId) throw new Error('セッションIDが取得できませんでした');
+      cfSessionId = joinData.sessionId;
+      console.log('[renderRoom] 新規CFセッション取得:', cfSessionId);
+    } catch (err) {
+      clearInterval(timerInterval);
+      micStream?.getTracks().forEach(t => t.stop()); // マイクを確実に解放
+      voiceChanger?.destroy(); voiceChanger = null;
+      alert(`ルーム接続エラー: ${err.message}`);
+      if (joinStatus === 401) {
+        // トークン期限切れ: loadInviteを削除してleft画面へ（ロビーへのリダイレクトループを防ぐ）
+        localStorage.removeItem(INVITE_KEY);
+        location.hash = `#/left/${roomId}`;
+      } else {
+        const savedToken = loadInvite(roomId);
+        location.hash = savedToken ? `#/room/${roomId}/lobby?t=${savedToken}` : `#/left/${roomId}`;
+      }
+      return;
+    }
   }
 
   roomClient = new RoomClient({
     roomId,
-    sessionId: sessionData.sessionId,
+    sessionId: cfSessionId,
     token: sessionData.token,
     userMeta: { name: profile.name, voice: profile.voice, icon: profile.icon },
     onEvent: handleRoomEvent,
+    voiceAnalyser: voiceChanger.analyserNode, // VoiceChangerの同一AudioContext内analyserを使用（iOS競合回避）
   });
 
   try {
     await roomClient.connect(processedStream);
   } catch (err) {
     clearInterval(timerInterval);
-    alert(`ルーム接続エラー: ${err.message}`);
-    voiceChanger.destroy();
-    location.hash = '#/';
+    const msg = err?.message || String(err) || '不明なエラー';
+    console.error('[connect] error:', err);
+    // destroy前にonEventをnoop化してdisconnectedトーストを遷移先ページに出さない
+    roomClient.onEvent = () => {};
+    roomClient.destroy();
+    roomClient = null;
+    voiceChanger?.destroy();
+    voiceChanger = null;
+    alert(`ルーム接続エラー: ${msg}`);
+    // ロビーまたは退出画面へ（管理者ホーム画面に飛ばさない）
+    const savedToken = loadInvite(roomId);
+    location.hash = savedToken ? `#/room/${roomId}/lobby?t=${savedToken}` : `#/left/${roomId}`;
     return;
   }
 
@@ -1040,8 +1104,11 @@ async function renderRoom(app, roomId) {
       overlay.remove();
       clearInterval(timerInterval);
       clearSession();
+      roomClient.onEvent = () => {}; // 退出後に disconnected トーストが出ないよう抑制
       roomClient.destroy();
+      roomClient = null;
       await voiceChanger?.destroy();
+      voiceChanger = null;
       document.getElementById('keepalive')?.pause();
       location.hash = `#/left/${roomId}`;
     });
@@ -1121,8 +1188,8 @@ function handleRoomEvent(event) {
           if (rid) {
             const savedToken = loadInvite(rid);
             if (savedToken) {
-              roomClient?.destroy();
-              voiceChanger?.destroy();
+              if (roomClient) { roomClient.onEvent = () => {}; roomClient.destroy(); roomClient = null; }
+              voiceChanger?.destroy(); voiceChanger = null;
               location.hash = `#/room/${rid}/lobby?t=${savedToken}`;
               return;
             }

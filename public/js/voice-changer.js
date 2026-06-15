@@ -217,6 +217,7 @@ export class VoiceChanger {
     this.compressor      = null;
     this.speakerGain     = null;
     this.destinationNode = null;
+    this.analyserNode    = null; // 話し中検出用（同一AudioContext内でタップ）
     this.breathSrc       = null;
     this.breathHPF       = null;
     this.breathGain      = null;
@@ -268,6 +269,8 @@ export class VoiceChanger {
     this.compressor.release.value   = 0.20;
 
     this.destinationNode = ctx.createMediaStreamDestination();
+    this.analyserNode    = ctx.createAnalyser();
+    this.analyserNode.fftSize = 512;
 
     this.speakerGain = ctx.createGain();
     this.speakerGain.gain.value = 0;
@@ -359,6 +362,7 @@ export class VoiceChanger {
     try { this.pk2Filter.disconnect();   } catch {}
     try { this.hsFilter.disconnect();    } catch {}
     try { this.compressor.disconnect();  } catch {}
+    try { this.analyserNode.disconnect();} catch {}
     try { this.breathGain.disconnect();  } catch {}
 
     this.pitchNode.parameters.get('pitchRatio').value   = p.pitchRatio;
@@ -393,7 +397,9 @@ export class VoiceChanger {
     this.pk2Filter.connect(this.hsFilter);
     this.hsFilter.connect(this.compressor);
     this.breathGain.connect(this.compressor);
-    this.compressor.connect(this.destinationNode);
+    // compressor → analyser → destination（同一AudioContext内でタップ → 別AudioContext不要）
+    this.compressor.connect(this.analyserNode);
+    this.analyserNode.connect(this.destinationNode);
     this.compressor.connect(this.speakerGain);
   }
 
