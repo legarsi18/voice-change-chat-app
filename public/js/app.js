@@ -842,15 +842,15 @@ function showMicError(err, statusEl) {
 // ───────────────────────────────────────────
 async function renderRoom(app, roomId) {
   const sessionData = loadSession(roomId);
-  if (!sessionData) {
-    // セッションがない場合：保存済み招待トークンがあればロビーへリダイレクト（再入室フロー）
+  // セッションがない、またはトークンが欠如している場合（旧セッションキャッシュ対策）
+  if (!sessionData || !sessionData.token) {
+    clearSession();
     const savedToken = loadInvite(roomId);
     if (savedToken) {
       location.hash = `#/room/${roomId}/lobby?t=${savedToken}`;
       return;
     }
     alert('招待URLからアクセスしてください');
-    clearSession();
     location.hash = '#/';
     return;
   }
