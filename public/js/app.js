@@ -116,6 +116,7 @@ function route() {
   } else {
     const lobbyMatch = hash.match(/^#\/room\/([^/]+)\/lobby(\?.*)?$/);
     const roomMatch  = hash.match(/^#\/room\/([^/]+)$/);
+    const leftMatch  = hash.match(/^#\/left\/([^/]+)$/);
 
     if (lobbyMatch) {
       const roomId = lobbyMatch[1];
@@ -123,6 +124,8 @@ function route() {
       renderLobby(app, roomId, params.get('t'));
     } else if (roomMatch) {
       renderRoom(app, roomMatch[1]);
+    } else if (leftMatch) {
+      renderLeft(app, leftMatch[1]);
     } else {
       renderHome(app);
     }
@@ -838,6 +841,35 @@ function showMicError(err, statusEl) {
 }
 
 // ───────────────────────────────────────────
+// 退出完了画面
+// ───────────────────────────────────────────
+function renderLeft(app, roomId) {
+  const savedToken = loadInvite(roomId);
+  app.innerHTML = `
+    <div class="screen home-screen">
+      <div class="logo">軍議の間</div>
+      <div class="invite-box" style="text-align:center;padding:24px 20px;">
+        <p style="font-size:18px;font-weight:700;margin-bottom:12px;">退出しました</p>
+        ${savedToken ? `
+          <p style="font-size:14px;color:var(--text2);margin-bottom:20px;">
+            再度参加する場合は下のボタンから
+          </p>
+          <button class="btn btn-primary" id="rejoinBtn">再参加する</button>
+        ` : ''}
+        <p style="font-size:12px;color:var(--text2);margin-top:${savedToken ? '16px' : '0'};line-height:1.6;">
+          ※ 招待リンクの期限が切れている場合は、<br>管理者より新たなURLをご依頼ください
+        </p>
+      </div>
+    </div>
+  `;
+  if (savedToken) {
+    document.getElementById('rejoinBtn').addEventListener('click', () => {
+      location.hash = `#/room/${roomId}/lobby?t=${savedToken}`;
+    });
+  }
+}
+
+// ───────────────────────────────────────────
 // 通話画面
 // ───────────────────────────────────────────
 async function renderRoom(app, roomId) {
@@ -1004,14 +1036,14 @@ async function renderRoom(app, roomId) {
       </div>
     `;
     document.body.appendChild(overlay);
-    document.getElementById('leaveYes').addEventListener('click', () => {
+    document.getElementById('leaveYes').addEventListener('click', async () => {
       overlay.remove();
       clearInterval(timerInterval);
       clearSession();
       roomClient.destroy();
-      voiceChanger?.destroy();
+      await voiceChanger?.destroy();
       document.getElementById('keepalive')?.pause();
-      location.hash = '#/';
+      location.hash = `#/left/${roomId}`;
     });
     document.getElementById('leaveNo').addEventListener('click', () => overlay.remove());
   });

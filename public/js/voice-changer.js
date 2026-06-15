@@ -409,10 +409,10 @@ export class VoiceChanger {
     }
   }
 
-  destroy() {
+  async destroy() {
     this.breathSrc?.stop();
     this.sourceNode?.disconnect();
-    this.audioContext?.close();
+    await this.audioContext?.close().catch(() => {});
     this.stream?.getTracks().forEach(t => t.stop());
   }
 }
