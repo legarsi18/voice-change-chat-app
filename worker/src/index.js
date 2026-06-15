@@ -57,6 +57,14 @@ async function validateToken(env, token, roomId) {
   return true;
 }
 
+// sessions エンドポイント用: roomId チェックなし・有効期限のみ確認
+async function validateBearer(env, token) {
+  const data = await env.KV.get(`token:${token}`, 'json');
+  if (!data) return false;
+  if (data.expiresAt < Date.now()) return false;
+  return true;
+}
+
 // ルーム作成のレート制限: 1IPあたり1分間に5回まで
 async function checkRateLimit(env, ip) {
   const key = `ratelimit:${ip}`;
@@ -116,17 +124,24 @@ export default {
       }
 
       const session = await cfFetch(env, '/sessions/new');
+      // join 時に token を書き直してこのエッジノードの KV キャッシュを確実に更新する
+      // → 直後の WS 接続でも validateToken が成功するようにする
+      await env.KV.put(
+        `token:${token}`,
+        JSON.stringify({ roomId, expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000 }),
+        { expirationTtl: 60 * 60 * 24 * 7 }
+      );
       return json({ roomId, sessionId: session.sessionId }, 200, request);
     }
 
     // POST /api/sessions/:sessionId/tracks → トラック公開・購読（CFへのプロキシ）
+    // sessionId は Cloudflare Calls が生成した推測不能な UUID。
+    // KV結果整合性問題を避けるため、Bearer トークンの有効性のみ確認する。
     const tracksMatch = path.match(/^\/api\/sessions\/([^/]+)\/tracks$/);
     if (tracksMatch && request.method === 'POST') {
       const sessionId = tracksMatch[1];
-      const bearer = (request.headers.get('Authorization') || '').replace('Bearer ', '');
-      // KV結果整合性問題を避けるため、長期間存在が確定しているinviteトークンで認証する
-      const tokenData = bearer ? await env.KV.get(`token:${bearer}`, 'json') : null;
-      if (!tokenData || tokenData.expiresAt < Date.now()) {
+      const bearer = (request.headers.get('Authorization') || '').slice(7);
+      if (!bearer || !(await validateBearer(env, bearer))) {
         return json({ error: 'Unauthorized' }, 401, request);
       }
       const body = await request.json();
@@ -138,9 +153,8 @@ export default {
     const renego = path.match(/^\/api\/sessions\/([^/]+)\/renegotiate$/);
     if (renego && request.method === 'PUT') {
       const sessionId = renego[1];
-      const bearer = (request.headers.get('Authorization') || '').replace('Bearer ', '');
-      const tokenData = bearer ? await env.KV.get(`token:${bearer}`, 'json') : null;
-      if (!tokenData || tokenData.expiresAt < Date.now()) {
+      const bearer = (request.headers.get('Authorization') || '').slice(7);
+      if (!bearer || !(await validateBearer(env, bearer))) {
         return json({ error: 'Unauthorized' }, 401, request);
       }
       const body = await request.json();
