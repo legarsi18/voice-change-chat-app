@@ -416,7 +416,8 @@ export class RoomClient {
     const check = () => {
       analyser.getByteFrequencyData(data);
       const avg = data.reduce((a, b) => a + b, 0) / data.length;
-      const isSpeaking = avg > 15;
+      // ミュート中は常に非発話扱い（analyserはraw音声を見るため）
+      const isSpeaking = avg > 15 && !this._muted;
       if (isSpeaking !== speaking) {
         speaking = isSpeaking;
         this._send({ type: 'speaking', value: speaking });
@@ -541,7 +542,14 @@ export class RoomClient {
   }
 
   setMute(muted) {
+    this._muted = muted;
     this.localStream.getAudioTracks().forEach(t => { t.enabled = !muted; });
+    // ミュート時は即座に speaking=false を全員に通知してアイコンを消す
+    // （analyserはraw音声を見るためtrack.enabled=falseでも反応し続けるため）
+    if (muted) {
+      this._send({ type: 'speaking', value: false });
+      this.onEvent({ type: 'self_speaking', value: false });
+    }
   }
 
   _send(data) {
