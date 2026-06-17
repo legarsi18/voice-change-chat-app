@@ -1062,6 +1062,14 @@ async function renderRoom(app, roomId) {
     return;
   }
 
+  // 入室直後はデフォルトミュート（プライバシー保護）
+  isMuted = true;
+  roomClient.setMute(true);
+  document.getElementById('muteBtn').textContent = '🔇 ミュート解除';
+  document.getElementById('muteBtn').classList.add('muted');
+  const initialSelfBadge = document.querySelector('#card-self .mute-badge');
+  if (initialSelfBadge) initialSelfBadge.style.display = 'flex';
+
   // UIイベント
   document.getElementById('voiceSelect').addEventListener('change', (e) => {
     profile.voice = e.target.value;
