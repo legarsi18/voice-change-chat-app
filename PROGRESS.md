@@ -220,6 +220,7 @@ ICEリスタート完了:    finally で _iceRestarting = false → キュード
 - [x] PWA対応（ホーム画面追加 / Service Worker）
 - [x] iOSバックグラウンド音声維持（silence.mp3 keepalive）
 - [x] スリープ・アプリ切替後の AudioContext 自動復帰（visibilitychange + Screen Wake Lock）
+- [x] バックグラウンド中も音声送信継続（RTCRtpSender.replaceTrack で生マイク直結）
 - [x] WebSocket keepalive ping（25秒間隔）
 - [x] 戦国テーマSVGアイコン8種 + カスタム画像アップロード
 
@@ -263,7 +264,8 @@ breathMix   : 0（全廃。PVノイズに加算されて悪化するため）
 
 | コミット | 内容 |
 |---|---|
-| `6825673` | fix: スリープ・アプリ切替後の送話停止を修正 ← **最新** |
+| `a8a72fd` | fix: バックグラウンド中も音声送信を継続（replaceTrack方式） ← **最新** |
+| `6825673` | fix: スリープ・アプリ切替後の AudioContext 復帰（WakeLock + visibilitychange） |
 | `0202cfa` | fix: ミュートボタン幅固定・サイズ統一 |
 | `1bdb16b` | fix: ミュートボタンSVGアイコン化・ボタンサイズ縮小・色分け |
 | `fa2e2f8` | feat: 入室直後はデフォルトミュート |
@@ -279,8 +281,8 @@ breathMix   : 0（全廃。PVノイズに加算されて悪化するため）
 
 | 項目 | 内容 |
 |---|---|
-| 最新コミット | `6825673` |
-| 最新プレビューURL | https://80da4e73.voice-change-chat-app.pages.dev |
+| 最新コミット | `a8a72fd` |
+| 最新プレビューURL | https://36e75992.voice-change-chat-app.pages.dev |
 | 本番URL | https://voice-change-chat-app.pages.dev |
 | SW キャッシュバージョン | `sakusen-v33` |
 | デプロイ日時 | 2026-06-18 |
@@ -329,6 +331,26 @@ breathMix   : 0（全廃。PVノイズに加算されて悪化するため）
 | Bug A | ルーム作成画面クリックで音楽が止まる（silence.mp3 keepalive） | 軽微 |
 | Bug B | テスト再生でマイク許可が毎回出る | 軽微 |
 | 改善 | token TTL の見直し（現在7日 / 24時間に短縮検討） | ユーザー判断待ち |
+
+---
+
+## バックグラウンド音声送信設計（2026-06-18）
+
+バックグラウンド移行時に `AudioContext` が suspended になり `AudioWorklet` が止まる問題への対策。
+
+```
+visibilitychange: hidden → RTCRtpSender.replaceTrack(rawMicTrack)
+  → getUserMedia 生マイクトラックを直接 WebRTC に差し替え
+  → AudioContext に依存せず OS 音声パイプで送信継続（Zoom/Meet 同方式）
+  → バックグラウンド中はボイスチェンジなし・素の声で届く
+
+visibilitychange: visible → voiceChanger.resume() → replaceTrack(processedTrack)
+  → AudioContext 再開 → AudioWorklet 出力に戻す → ボイスチェンジ再開
+```
+
+- `replaceAudioTrack()` は `RoomClient` に追加（SDP 再ネゴシエーション不要）
+- `setMute()` は sender の現トラックも制御（bg 中にミュート変更しても正常動作）
+- iOS 14.5+ / Android Chrome で `replaceTrack()` サポート確認済み
 
 ---
 
