@@ -1223,7 +1223,7 @@ function addParticipantCard({ clientId, name, voice, iconSrc, isSelf = false, mu
     <div class="card-icon-wrap">
       <img class="card-icon" src="${iconSrc}" alt="${name}">
       <div class="speaking-ring"></div>
-      <div class="mute-badge" style="display:${muted ? 'flex' : 'none'}">🔇</div>
+      <div class="mute-badge" style="display:${muted ? 'flex' : 'none'}"><svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" width="12" height="12"><rect x="6.5" y="1.5" width="7" height="10" rx="3.5" fill="rgba(255,255,255,0.9)"/><path d="M4 10a6 6 0 0 0 12 0" stroke="rgba(255,255,255,0.9)" stroke-width="1.8" stroke-linecap="round" fill="none"/><line x1="10" y1="16" x2="10" y2="18.5" stroke="rgba(255,255,255,0.9)" stroke-width="1.8" stroke-linecap="round"/><line x1="7" y1="18.5" x2="13" y2="18.5" stroke="rgba(255,255,255,0.9)" stroke-width="1.8" stroke-linecap="round"/><line x1="2" y1="2" x2="18" y2="18" stroke="white" stroke-width="2.2" stroke-linecap="round"/></svg></div>
     </div>
     <div class="card-name">${escapeHtml(name)}${isSelf ? ' (自分)' : ''}</div>
     <div class="card-voice">${VOICE_PRESETS[voice]?.label || ''}</div>

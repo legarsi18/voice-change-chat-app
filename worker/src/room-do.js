@@ -136,6 +136,7 @@ export class RoomDurableObject {
       // ミュート状態変更（新規参加者の init に含まれるよう meta に保存）
       case 'mute_state':
         session.meta.muted = data.muted;
+        await this.state.storage.put(`meta:${clientId}`, session.meta);
         this.broadcast(clientId, { type: 'peer_muted', clientId, muted: data.muted });
         break;
 
