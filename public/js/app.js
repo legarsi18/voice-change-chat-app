@@ -1094,14 +1094,30 @@ async function renderRoom(app, roomId) {
   await _acquireWakeLock();
 
   _visibilityChangeHandler = async () => {
-    if (document.visibilityState !== 'visible') return;
-    // アプリ復帰時に AudioContext が suspended になっている場合がある
-    await voiceChanger?.resume();
-    // keepalive audio が止まっていたら再生（iOS バックグラウンド対策）
-    const ka = document.getElementById('keepalive');
-    if (ka?.paused) ka.play().catch(() => {});
-    // Wake Lock は tab/app 切り替え時に自動解放されるため再取得
-    await _acquireWakeLock();
+    if (document.visibilityState === 'hidden') {
+      // ─── バックグラウンド移行 ───
+      // AudioContext は間もなく suspended になり AudioWorklet が止まる
+      // → RTCRtpSender を生マイクトラックに差し替えて音声送信を継続
+      const rawTrack = voiceChanger?.stream?.getAudioTracks()[0];
+      if (rawTrack?.readyState === 'live') {
+        await roomClient?.replaceAudioTrack(rawTrack).catch(() => {});
+      }
+
+    } else if (document.visibilityState === 'visible') {
+      // ─── フォアグラウンド復帰 ───
+      // AudioContext を再開（suspended 状態から復帰）
+      await voiceChanger?.resume();
+      // RTCRtpSender を AudioWorklet 処理済みトラックに戻す
+      const processedTrack = voiceChanger?.outputStream?.getAudioTracks()[0];
+      if (processedTrack) {
+        await roomClient?.replaceAudioTrack(processedTrack).catch(() => {});
+      }
+      // keepalive audio が止まっていたら再生（iOS バックグラウンド対策）
+      const ka = document.getElementById('keepalive');
+      if (ka?.paused) ka.play().catch(() => {});
+      // Wake Lock は tab/app 切り替え時に自動解放されるため再取得
+      await _acquireWakeLock();
+    }
   };
   document.addEventListener('visibilitychange', _visibilityChangeHandler);
 

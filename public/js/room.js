@@ -547,7 +547,12 @@ export class RoomClient {
 
   setMute(muted) {
     this._muted = muted;
+    // AudioWorklet 出力（通常フォアグラウンド）のトラックを制御
     this.localStream.getAudioTracks().forEach(t => { t.enabled = !muted; });
+    // バックグラウンド中は replaceAudioTrack() で生マイクトラックが送信されているため
+    // sender の現トラックも直接制御する（replaceTrack 後は localStream トラックと異なる場合がある）
+    const senderTrack = this.peerConnection?.getSenders().find(s => s.track?.kind === 'audio')?.track;
+    if (senderTrack) senderTrack.enabled = !muted;
     // ミュート状態を他の参加者に通知（バッジ表示用）
     this._send({ type: 'mute_state', muted });
     // ミュート時は即座に speaking=false を全員に通知してリングを消す
@@ -556,6 +561,16 @@ export class RoomClient {
       this._send({ type: 'speaking', value: false });
       this.onEvent({ type: 'self_speaking', value: false });
     }
+  }
+
+  // バックグラウンド↔フォアグラウンド切り替え時に WebRTC 送信トラックを差し替える
+  // RTCRtpSender.replaceTrack() は SDP 再ネゴシエーション不要（iOS 14.5+）
+  async replaceAudioTrack(track) {
+    const sender = this.peerConnection?.getSenders().find(s => s.track?.kind === 'audio');
+    if (!sender) return;
+    await sender.replaceTrack(track);
+    // ミュート状態を新トラックに即時反映（バックグラウンド中にミュート変更があった場合を含む）
+    if (track) track.enabled = !this._muted;
   }
 
   _send(data) {
