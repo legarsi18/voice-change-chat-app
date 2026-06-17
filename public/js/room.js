@@ -516,6 +516,10 @@ export class RoomClient {
         this.onEvent({ type: 'peer_speaking', clientId: data.clientId, value: data.value });
         break;
 
+      case 'peer_muted':
+        this.onEvent({ type: 'peer_muted', clientId: data.clientId, muted: data.muted });
+        break;
+
       case 'pong':
         // ping に対するサーバーからの応答（接続確認用）
         break;
@@ -544,7 +548,9 @@ export class RoomClient {
   setMute(muted) {
     this._muted = muted;
     this.localStream.getAudioTracks().forEach(t => { t.enabled = !muted; });
-    // ミュート時は即座に speaking=false を全員に通知してアイコンを消す
+    // ミュート状態を他の参加者に通知（バッジ表示用）
+    this._send({ type: 'mute_state', muted });
+    // ミュート時は即座に speaking=false を全員に通知してリングを消す
     // （analyserはraw音声を見るためtrack.enabled=falseでも反応し続けるため）
     if (muted) {
       this._send({ type: 'speaking', value: false });

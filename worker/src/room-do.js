@@ -58,6 +58,7 @@ export class RoomDurableObject {
       sessionId: null,
       trackNames: [],
       speaking: false,
+      muted: false,
     };
 
     // タグにメタ情報を保存（Hibernation後の再構築に使用）
@@ -130,6 +131,12 @@ export class RoomDurableObject {
       case 'speaking':
         session.meta.speaking = data.value;
         this.broadcast(clientId, { type: 'peer_speaking', clientId, value: data.value });
+        break;
+
+      // ミュート状態変更（新規参加者の init に含まれるよう meta に保存）
+      case 'mute_state':
+        session.meta.muted = data.muted;
+        this.broadcast(clientId, { type: 'peer_muted', clientId, muted: data.muted });
         break;
 
       // WebSocket keepalive ping（クライアントが25秒毎に送信）

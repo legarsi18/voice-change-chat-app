@@ -1,4 +1,4 @@
-const CACHE = 'sakusen-v27';
+const CACHE = 'sakusen-v28';
 const PRECACHE = ['/', '/css/style.css', '/js/app.js', '/js/room.js', '/js/voice-changer.js', '/js/worklets/pitch-shifter.js'];
 
 self.addEventListener('install', e => {

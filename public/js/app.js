@@ -1076,6 +1076,8 @@ async function renderRoom(app, roomId) {
     roomClient.setMute(isMuted);
     document.getElementById('muteBtn').textContent = isMuted ? '🔇 ミュート解除' : '🎤 ミュート';
     document.getElementById('muteBtn').classList.toggle('muted', isMuted);
+    const selfBadge = document.querySelector('#card-self .mute-badge');
+    if (selfBadge) selfBadge.style.display = isMuted ? 'flex' : 'none';
   });
 
   document.getElementById('memoSend').addEventListener('click', sendMemo);
@@ -1148,6 +1150,11 @@ function handleRoomEvent(event) {
     case 'peer_speaking':
       document.getElementById(`card-${event.clientId}`)?.classList.toggle('speaking', event.value);
       break;
+    case 'peer_muted': {
+      const badge = document.querySelector(`#card-${event.clientId} .mute-badge`);
+      if (badge) badge.style.display = event.muted ? 'flex' : 'none';
+      break;
+    }
     case 'self_speaking':
       document.getElementById('card-self')?.classList.toggle('speaking', event.value);
       break;
@@ -1204,7 +1211,7 @@ function handleRoomEvent(event) {
 // ───────────────────────────────────────────
 // UI ヘルパー
 // ───────────────────────────────────────────
-function addParticipantCard({ clientId, name, voice, iconSrc, isSelf = false }) {
+function addParticipantCard({ clientId, name, voice, iconSrc, isSelf = false, muted = false }) {
   const grid = document.getElementById('participants');
   if (!grid) return;
   const id = isSelf ? 'self' : clientId;
@@ -1216,6 +1223,7 @@ function addParticipantCard({ clientId, name, voice, iconSrc, isSelf = false }) 
     <div class="card-icon-wrap">
       <img class="card-icon" src="${iconSrc}" alt="${name}">
       <div class="speaking-ring"></div>
+      <div class="mute-badge" style="display:${muted ? 'flex' : 'none'}">🔇</div>
     </div>
     <div class="card-name">${escapeHtml(name)}${isSelf ? ' (自分)' : ''}</div>
     <div class="card-voice">${VOICE_PRESETS[voice]?.label || ''}</div>
