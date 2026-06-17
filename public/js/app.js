@@ -12,7 +12,7 @@ const ROOM_MAX_MS = 3 * 60 * 60 * 1000; // 3時間
 const _SVG_MIC_OFF = `<svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" width="15" height="15" style="vertical-align:-2px;margin-right:5px"><rect x="6.5" y="1.5" width="7" height="10" rx="3.5" fill="currentColor" opacity="0.9"/><path d="M4 10a6 6 0 0 0 12 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/><line x1="10" y1="16" x2="10" y2="18.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="7" y1="18.5" x2="13" y2="18.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="2" y1="2" x2="18" y2="18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>`;
 const _SVG_MIC_ON  = `<svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" width="15" height="15" style="vertical-align:-2px;margin-right:5px"><rect x="6.5" y="1.5" width="7" height="10" rx="3.5" fill="currentColor" opacity="0.9"/><path d="M4 10a6 6 0 0 0 12 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/><line x1="10" y1="16" x2="10" y2="18.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><line x1="7" y1="18.5" x2="13" y2="18.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
 function muteBtnHTML(muted) {
-  return muted ? `${_SVG_MIC_OFF}ミュート解除` : `${_SVG_MIC_ON}ミュート`;
+  return muted ? `${_SVG_MIC_OFF}解除` : `${_SVG_MIC_ON}ミュート`;
 }
 
 let profile = loadProfile();
