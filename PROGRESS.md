@@ -1,6 +1,6 @@
 # 軍議の間 — 開発進捗・引き継ぎドキュメント
 
-最終更新: 2026-06-18
+最終更新: 2026-06-18（スリープ・アプリ切替修正）
 
 ---
 
@@ -219,6 +219,7 @@ ICEリスタート完了:    finally で _iceRestarting = false → キュード
 - [x] 退出後バックボタンでルームに戻らない（location.replace による履歴管理）
 - [x] PWA対応（ホーム画面追加 / Service Worker）
 - [x] iOSバックグラウンド音声維持（silence.mp3 keepalive）
+- [x] スリープ・アプリ切替後の AudioContext 自動復帰（visibilitychange + Screen Wake Lock）
 - [x] WebSocket keepalive ping（25秒間隔）
 - [x] 戦国テーマSVGアイコン8種 + カスタム画像アップロード
 
@@ -262,7 +263,8 @@ breathMix   : 0（全廃。PVノイズに加算されて悪化するため）
 
 | コミット | 内容 |
 |---|---|
-| `0202cfa` | fix: ミュートボタン幅固定・サイズ統一 ← **最新** |
+| `6825673` | fix: スリープ・アプリ切替後の送話停止を修正 ← **最新** |
+| `0202cfa` | fix: ミュートボタン幅固定・サイズ統一 |
 | `1bdb16b` | fix: ミュートボタンSVGアイコン化・ボタンサイズ縮小・色分け |
 | `fa2e2f8` | feat: 入室直後はデフォルトミュート |
 | `4d778e1` | fix: ミュートバッジをマイクSVGアイコンに・遅れ入室でも既存ミュート表示 |
@@ -277,10 +279,10 @@ breathMix   : 0（全廃。PVノイズに加算されて悪化するため）
 
 | 項目 | 内容 |
 |---|---|
-| 最新コミット | `0202cfa` |
-| 最新プレビューURL | https://199ae625.voice-change-chat-app.pages.dev |
+| 最新コミット | `6825673` |
+| 最新プレビューURL | https://80da4e73.voice-change-chat-app.pages.dev |
 | 本番URL | https://voice-change-chat-app.pages.dev |
-| SW キャッシュバージョン | `sakusen-v32` |
+| SW キャッシュバージョン | `sakusen-v33` |
 | デプロイ日時 | 2026-06-18 |
 
 ---
