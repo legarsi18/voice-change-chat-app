@@ -276,10 +276,13 @@ export class VoiceChanger {
     this.speakerGain.gain.value = 0;
     this.speakerGain.connect(ctx.destination);
 
-    // iOS バックグラウンド対策
+    // AudioContext バックグラウンド維持用：極小音量の超低周波を ctx.destination に流し続ける
+    // gain=0 だと「出力なし=idle」と判定されて Android で AudioContext が suspended になる場合がある
+    // 1Hz・-80dB（0.0001）は可聴域外かつスピーカーへのダメージなし
     const kaOsc  = ctx.createOscillator();
     const kaGain = ctx.createGain();
-    kaGain.gain.value = 0;
+    kaOsc.frequency.value = 1;      // 超低周波（可聴域外）
+    kaGain.gain.value = 0.0001;     // 約 -80dB（実質無音）
     kaOsc.connect(kaGain);
     kaGain.connect(ctx.destination);
     kaOsc.start();
