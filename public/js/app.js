@@ -22,6 +22,10 @@ let isMuted = false;
 let testMicStream = null; // マイクテスト用ストリームをキャッシュ（iOS許可を使い回す）
 let sharedMicStream = null; // ロビーで取得したストリームをルームに引き継ぐ
 
+// スリープ・アプリ切り替え対策
+let _wakeLock = null;
+let _visibilityChangeHandler = null;
+
 // ── ボイス調整パネル用 ──
 let panelTestVc = null;
 let panelTestMicStream = null;
@@ -326,6 +330,12 @@ function setupVoiceAdjustPanel() {
 
 function _leaveRoomCleanup() {
   // ルーム以外の画面への遷移時に必ず呼ぶ。ブラウザの戻るボタンでルームから離れた場合も含む。
+  if (_visibilityChangeHandler) {
+    document.removeEventListener('visibilitychange', _visibilityChangeHandler);
+    _visibilityChangeHandler = null;
+  }
+  _wakeLock?.release().catch(() => {});
+  _wakeLock = null;
   if (roomClient) {
     roomClient.onEvent = () => {};
     roomClient.destroy();
@@ -888,6 +898,12 @@ function renderLeft(app, roomId) {
 // ───────────────────────────────────────────
 async function renderRoom(app, roomId) {
   // 前回セッションのリソースを確実にクリーンアップ（退出ボタンを押さずに戻ってきた場合）
+  if (_visibilityChangeHandler) {
+    document.removeEventListener('visibilitychange', _visibilityChangeHandler);
+    _visibilityChangeHandler = null;
+  }
+  _wakeLock?.release().catch(() => {});
+  _wakeLock = null;
   if (roomClient) {
     roomClient.onEvent = () => {}; // disconnectedトーストが新ルーム画面に出ないよう抑制
     roomClient.destroy();
@@ -1069,6 +1085,26 @@ async function renderRoom(app, roomId) {
     return;
   }
 
+  // ─── スリープ・アプリ切り替え後の AudioContext 復帰 ───
+  // Screen Wake Lock: 画面スリープ自体を防ぐ（iOS 16.4+ / Android Chrome 対応）
+  const _acquireWakeLock = async () => {
+    if (!('wakeLock' in navigator)) return;
+    try { _wakeLock = await navigator.wakeLock.request('screen'); } catch {}
+  };
+  await _acquireWakeLock();
+
+  _visibilityChangeHandler = async () => {
+    if (document.visibilityState !== 'visible') return;
+    // アプリ復帰時に AudioContext が suspended になっている場合がある
+    await voiceChanger?.resume();
+    // keepalive audio が止まっていたら再生（iOS バックグラウンド対策）
+    const ka = document.getElementById('keepalive');
+    if (ka?.paused) ka.play().catch(() => {});
+    // Wake Lock は tab/app 切り替え時に自動解放されるため再取得
+    await _acquireWakeLock();
+  };
+  document.addEventListener('visibilitychange', _visibilityChangeHandler);
+
   // 入室直後はデフォルトミュート（プライバシー保護）
   isMuted = true;
   roomClient.setMute(true);
@@ -1119,6 +1155,12 @@ async function renderRoom(app, roomId) {
       overlay.remove();
       clearInterval(timerInterval);
       clearSession();
+      if (_visibilityChangeHandler) {
+        document.removeEventListener('visibilitychange', _visibilityChangeHandler);
+        _visibilityChangeHandler = null;
+      }
+      _wakeLock?.release().catch(() => {});
+      _wakeLock = null;
       roomClient.onEvent = () => {}; // 退出後に disconnected トーストが出ないよう抑制
       roomClient.destroy();
       roomClient = null;
