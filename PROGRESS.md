@@ -221,6 +221,8 @@ ICEリスタート完了:    finally で _iceRestarting = false → キュード
 - [x] iOSバックグラウンド音声維持（silence.mp3 keepalive）
 - [x] スリープ・アプリ切替後の AudioContext 自動復帰（visibilitychange + Screen Wake Lock）
 - [x] バックグラウンド中も音声送信継続（RTCRtpSender.replaceTrack で生マイク直結）
+- [x] MediaSession API（iOS/Android に通話中オーディオアプリとして認識させる）
+- [x] PWA インストール案内バナー（iOS 16.4+ でホーム画面追加するとボイチェン背面通話が可能）
 - [x] WebSocket keepalive ping（25秒間隔）
 - [x] 戦国テーマSVGアイコン8種 + カスタム画像アップロード
 
@@ -264,7 +266,9 @@ breathMix   : 0（全廃。PVノイズに加算されて悪化するため）
 
 | コミット | 内容 |
 |---|---|
-| `a8a72fd` | fix: バックグラウンド中も音声送信を継続（replaceTrack方式） ← **最新** |
+| `5b6133c` | feat: MediaSession API + PWA インストール案内バナー ← **最新** |
+| `da95d03` | fix: AudioContext バックグラウンド維持（kaOsc 極小出力） |
+| `a8a72fd` | fix: バックグラウンド中も音声送信を継続（replaceTrack方式） |
 | `6825673` | fix: スリープ・アプリ切替後の AudioContext 復帰（WakeLock + visibilitychange） |
 | `0202cfa` | fix: ミュートボタン幅固定・サイズ統一 |
 | `1bdb16b` | fix: ミュートボタンSVGアイコン化・ボタンサイズ縮小・色分け |
@@ -281,10 +285,10 @@ breathMix   : 0（全廃。PVノイズに加算されて悪化するため）
 
 | 項目 | 内容 |
 |---|---|
-| 最新コミット | `a8a72fd` |
-| 最新プレビューURL | https://36e75992.voice-change-chat-app.pages.dev |
+| 最新コミット | `5b6133c` |
+| 最新プレビューURL | https://4ed09d8a.voice-change-chat-app.pages.dev |
 | 本番URL | https://voice-change-chat-app.pages.dev |
-| SW キャッシュバージョン | `sakusen-v33` |
+| SW キャッシュバージョン | `sakusen-v35` |
 | デプロイ日時 | 2026-06-18 |
 
 ---
